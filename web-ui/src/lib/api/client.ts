@@ -3,7 +3,7 @@ import { Container, ContainerMetrics, CreateContainerRequest, CreateContainerRes
 import { Server } from '@/src/types/server';
 import { App, NetworkACL, ProxyRoute, NetworkTopology, ACLPresetInfo, DNSRecord, PassthroughRoute } from '@/src/types/app';
 import { Connection, ConnectionSummary, HistoricalConnection, TrafficAggregate, GetConnectionsResponse, GetConnectionSummaryResponse, QueryTrafficHistoryResponse, GetTrafficAggregatesResponse } from '@/src/types/traffic';
-import { ClamavSummaryResponse, ClamavReportsResponse, ListClamavReportsParams, TriggerScanResponse, ScanStatusResponse, PentestScanRunsResponse, PentestFindingsResponse, PentestFindingSummaryResponse, PentestConfigResponse, TriggerPentestScanResponse, ListPentestFindingsParams, InstallPentestToolResponse } from '@/src/types/security';
+import { ClamavSummaryResponse, ClamavReportsResponse, ListClamavReportsParams, TriggerScanResponse, ScanStatusResponse, PentestScanRunsResponse, PentestFindingsResponse, PentestFindingSummaryResponse, PentestConfigResponse, TriggerPentestScanResponse, ListPentestFindingsParams, InstallPentestToolResponse, ZapScanRunsResponse, ZapAlertsResponse, ZapAlertSummaryResponse, ZapConfigResponse, TriggerZapScanResponse, ZapReportResponse, InstallZapResponse, ListZapAlertsParams } from '@/src/types/security';
 import { AuditLogsResponse, AuditLogsParams } from '@/src/types/audit';
 import { AlertRule, AlertRulesResponse, AlertingInfoResponse, CreateAlertRuleRequest, UpdateAlertRuleRequest, UpdateAlertingConfigResponse, TestWebhookResponse, WebhookDeliveriesResponse } from '@/src/types/alerts';
 
@@ -1164,6 +1164,138 @@ export class ContaineriumClient {
         durationMs: d.durationMs || (d as any).duration_ms || 0,
       })),
       totalCount: response.data.totalCount || (response.data as any).total_count || 0,
+    };
+  }
+
+  // ============================================
+  // ZAP Methods
+  // ============================================
+
+  async triggerZapScan(): Promise<TriggerZapScanResponse> {
+    const response = await this.client.post<TriggerZapScanResponse>('/zap/scan', {});
+    return {
+      scanRunId: response.data.scanRunId || (response.data as any).scan_run_id || '',
+      message: response.data.message || '',
+    };
+  }
+
+  async listZapScanRuns(limit: number = 20, offset: number = 0): Promise<ZapScanRunsResponse> {
+    const response = await this.client.get<ZapScanRunsResponse>('/zap/scans', {
+      params: { limit, offset },
+    });
+    return {
+      scanRuns: (response.data.scanRuns || (response.data as any).scan_runs || []).map((r: any) => ({
+        id: r.id,
+        trigger: r.trigger || '',
+        status: r.status || '',
+        targetsCount: r.targetsCount || r.targets_count || 0,
+        highCount: r.highCount || r.high_count || 0,
+        mediumCount: r.mediumCount || r.medium_count || 0,
+        lowCount: r.lowCount || r.low_count || 0,
+        infoCount: r.infoCount || r.info_count || 0,
+        errorMessage: r.errorMessage || r.error_message || '',
+        startedAt: r.startedAt || r.started_at || '',
+        completedAt: r.completedAt || r.completed_at || '',
+        duration: r.duration || '',
+        completedCount: r.completedCount || r.completed_count || 0,
+      })),
+      totalCount: response.data.totalCount || (response.data as any).total_count || 0,
+    };
+  }
+
+  async listZapAlerts(params?: ListZapAlertsParams): Promise<ZapAlertsResponse> {
+    const queryParams: Record<string, any> = {};
+    if (params) {
+      if (params.risk) queryParams.risk = params.risk;
+      if (params.status) queryParams.status = params.status;
+      if (params.limit !== undefined) queryParams.limit = params.limit;
+      if (params.offset !== undefined) queryParams.offset = params.offset;
+    }
+    const response = await this.client.get<ZapAlertsResponse>('/zap/alerts', { params: queryParams });
+    return {
+      alerts: (response.data.alerts || []).map((a: any) => ({
+        id: a.id,
+        fingerprint: a.fingerprint || '',
+        pluginId: a.pluginId || a.plugin_id || '',
+        alertName: a.alertName || a.alert_name || '',
+        risk: a.risk || '',
+        confidence: a.confidence || '',
+        description: a.description || '',
+        url: a.url || '',
+        method: a.method || '',
+        evidence: a.evidence || '',
+        solution: a.solution || '',
+        cweIds: a.cweIds || a.cwe_ids || '',
+        references: a.references || '',
+        status: a.status || '',
+        firstScanRunId: a.firstScanRunId || a.first_scan_run_id || '',
+        lastScanRunId: a.lastScanRunId || a.last_scan_run_id || '',
+        firstSeenAt: a.firstSeenAt || a.first_seen_at || '',
+        lastSeenAt: a.lastSeenAt || a.last_seen_at || '',
+        resolvedAt: a.resolvedAt || a.resolved_at || '',
+        suppressed: a.suppressed || false,
+        suppressedReason: a.suppressedReason || a.suppressed_reason || '',
+      })),
+      totalCount: response.data.totalCount || (response.data as any).total_count || 0,
+    };
+  }
+
+  async getZapAlertSummary(): Promise<ZapAlertSummaryResponse> {
+    const response = await this.client.get<ZapAlertSummaryResponse>('/zap/alerts/summary');
+    const s: any = response.data.summary || response.data;
+    return {
+      summary: {
+        totalAlerts: s.totalAlerts || s.total_alerts || 0,
+        openAlerts: s.openAlerts || s.open_alerts || 0,
+        resolvedAlerts: s.resolvedAlerts || s.resolved_alerts || 0,
+        suppressedAlerts: s.suppressedAlerts || s.suppressed_alerts || 0,
+        highCount: s.highCount || s.high_count || 0,
+        mediumCount: s.mediumCount || s.medium_count || 0,
+        lowCount: s.lowCount || s.low_count || 0,
+        infoCount: s.infoCount || s.info_count || 0,
+      },
+    };
+  }
+
+  async suppressZapAlert(alertId: number, reason: string): Promise<{ message: string }> {
+    const response = await this.client.post(`/zap/alerts/${alertId}/suppress`, {
+      alert_id: alertId,
+      reason,
+    });
+    return { message: response.data.message || '' };
+  }
+
+  async getZapConfig(): Promise<ZapConfigResponse> {
+    const response = await this.client.get<ZapConfigResponse>('/zap/config');
+    const c: any = response.data.config || response.data;
+    return {
+      config: {
+        enabled: c.enabled || false,
+        interval: c.interval || '',
+        zapAvailable: c.zapAvailable || c.zap_available || false,
+        zapVersion: c.zapVersion || c.zap_version || '',
+      },
+    };
+  }
+
+  async getZapReport(scanRunId: string, format: string = 'html'): Promise<ZapReportResponse> {
+    const response = await this.client.get<ZapReportResponse>(`/zap/scans/${scanRunId}/report`, {
+      params: { format },
+    });
+    return {
+      content: response.data.content || '',
+      contentType: response.data.contentType || (response.data as any).content_type || '',
+      filename: response.data.filename || '',
+    };
+  }
+
+  async installZap(): Promise<InstallZapResponse> {
+    const response = await this.client.post<InstallZapResponse>('/zap/install', {}, {
+      timeout: 300000, // 5 minutes — ZAP is a large download
+    });
+    return {
+      success: response.data.success || false,
+      message: response.data.message || '',
     };
   }
 

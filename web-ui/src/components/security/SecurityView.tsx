@@ -29,6 +29,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import ShieldIcon from '@mui/icons-material/Shield';
 import BugReportIcon from '@mui/icons-material/BugReport';
+import RadarIcon from '@mui/icons-material/Radar';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import ScannerIcon from '@mui/icons-material/Scanner';
 import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
@@ -41,6 +42,7 @@ import { ClamavContainerSummary, ClamavReport, ScanStatusResponse } from '@/src/
 import { useSecurity } from '@/src/lib/hooks/useSecurity';
 import { getClient } from '@/src/lib/api/client';
 import PentestView from './PentestView';
+import ZapView from './ZapView';
 
 interface SecurityViewProps {
   server: Server;
@@ -255,10 +257,12 @@ export default function SecurityView({ server }: SecurityViewProps) {
       >
         <Tab icon={<ShieldIcon />} iconPosition="start" label="Malware Scan" />
         <Tab icon={<BugReportIcon />} iconPosition="start" label="Pentest" />
+        <Tab icon={<RadarIcon />} iconPosition="start" label="ZAP Scan" />
       </Tabs>
 
       {securityTab === 0 && <ClamavView server={server} />}
       {securityTab === 1 && <PentestView server={server} />}
+      {securityTab === 2 && <ZapView server={server} />}
     </Box>
   );
 }
