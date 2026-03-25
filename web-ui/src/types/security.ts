@@ -191,3 +191,104 @@ export interface ListPentestFindingsParams {
   limit?: number;
   offset?: number;
 }
+
+// ============= ZAP Types =============
+
+export interface ZapScanRun {
+  id: string;
+  trigger: string;
+  status: 'running' | 'completed' | 'failed';
+  targetsCount: number;
+  highCount: number;
+  mediumCount: number;
+  lowCount: number;
+  infoCount: number;
+  errorMessage: string;
+  startedAt: string;
+  completedAt: string;
+  duration: string;
+  completedCount: number;
+}
+
+export interface ZapAlert {
+  id: number;
+  fingerprint: string;
+  pluginId: string;
+  alertName: string;
+  risk: 'high' | 'medium' | 'low' | 'informational';
+  confidence: string;
+  description: string;
+  url: string;
+  method: string;
+  evidence: string;
+  solution: string;
+  cweIds: string;
+  references: string;
+  status: 'open' | 'resolved' | 'suppressed';
+  firstScanRunId: string;
+  lastScanRunId: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  resolvedAt: string;
+  suppressed: boolean;
+  suppressedReason: string;
+}
+
+export interface ZapAlertSummary {
+  totalAlerts: number;
+  openAlerts: number;
+  resolvedAlerts: number;
+  suppressedAlerts: number;
+  highCount: number;
+  mediumCount: number;
+  lowCount: number;
+  infoCount: number;
+}
+
+export interface ZapConfig {
+  enabled: boolean;
+  interval: string;
+  zapAvailable: boolean;
+  zapVersion: string;
+}
+
+export interface ZapScanRunsResponse {
+  scanRuns: ZapScanRun[];
+  totalCount: number;
+}
+
+export interface ZapAlertsResponse {
+  alerts: ZapAlert[];
+  totalCount: number;
+}
+
+export interface ZapAlertSummaryResponse {
+  summary: ZapAlertSummary;
+}
+
+export interface ZapConfigResponse {
+  config: ZapConfig;
+}
+
+export interface TriggerZapScanResponse {
+  scanRunId: string;
+  message: string;
+}
+
+export interface ZapReportResponse {
+  content: string;
+  contentType: string;
+  filename: string;
+}
+
+export interface InstallZapResponse {
+  success: boolean;
+  message: string;
+}
+
+export interface ListZapAlertsParams {
+  risk?: string;
+  status?: string;
+  limit?: number;
+  offset?: number;
+}

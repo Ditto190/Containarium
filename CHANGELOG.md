@@ -8,7 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **OWASP ZAP web application scanning** — New "ZAP Scan" tab under Security for automated web application vulnerability scanning of all exposed Containarium endpoints.
+  - Full gRPC service with 8 RPCs: trigger scan, list scans, list alerts, get summary, suppress alert, get config, download report, install ZAP
+  - PostgreSQL persistence with 3 tables (`zap_scan_runs`, `zap_alerts`, `zap_scan_jobs`) and fingerprint-based alert deduplication
+  - Async job queue with 2 concurrent workers and configurable scan interval (default 30 days)
+  - Spider + active scan per target URL via ZAP daemon REST API running inside the security container
+  - HTML/JSON report generation and download per scan run
+  - React UI with summary cards, alert table with risk/status filters, pagination, suppress dialog, CSV/JSON export, scan history with report download, and one-click ZAP installation
+  - Proto definitions (`proto/containarium/v1/zap.proto`), server implementation, and REST gateway
 - **Pentest findings download** — Download all filtered pentest findings as CSV or JSON from the Security > Pentest tab. The download respects current severity/category/status filters and fetches up to 1000 findings per target type.
+
+### Changed
+- **Security tools moved to container** — nuclei, trivy, and ZAP now install and run inside the `containarium-core-security` container instead of the host filesystem, freeing ~290MB on the root disk. The pentest installer, nuclei module, and trivy module all use `incus exec` to operate inside the container. Trivy mounts target container rootfs via disk devices.
 
 ### Fixed
 - **Port-scan findings misclassified as domain findings** — The `ports` scanner module now only runs on container targets, preventing open-port findings from appearing under "Domain Findings". Existing misclassified findings are automatically reclassified on startup.

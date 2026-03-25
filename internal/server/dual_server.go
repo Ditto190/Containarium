@@ -27,6 +27,7 @@ import (
 	"github.com/footprintai/containarium/internal/network"
 	"github.com/footprintai/containarium/internal/pentest"
 	"github.com/footprintai/containarium/internal/security"
+	zapscanner "github.com/footprintai/containarium/internal/zap"
 	"github.com/footprintai/containarium/internal/traffic"
 	pb "github.com/footprintai/containarium/pkg/pb/containarium/v1"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -107,6 +108,8 @@ type DualServer struct {
 	alertDeliveryStore    *alert.DeliveryStore
 	pentestManager        *pentest.Manager
 	pentestStore          *pentest.Store
+	zapManager            *zapscanner.Manager
+	zapStore              *zapscanner.Store
 }
 
 // NewDualServer creates a new dual server instance
@@ -591,6 +594,31 @@ skipAppHosting:
 		}
 	}
 
+	// Setup ZAP scanner manager
+	var zapManager *zapscanner.Manager
+	var zapStore *zapscanner.Store
+	if postgresConnString != "" {
+		zapPool, poolErr := connectToPostgres(postgresConnString, 5, 3*time.Second)
+		if poolErr != nil {
+			log.Printf("Warning: Failed to connect to PostgreSQL for ZAP store: %v", poolErr)
+		} else {
+			zapStore, err = zapscanner.NewStore(context.Background(), zapPool)
+			if err != nil {
+				log.Printf("Warning: Failed to create ZAP store: %v", err)
+				zapPool.Close()
+			} else {
+				zapManager = zapscanner.NewManager(
+					zapStore,
+					routeStore,
+					zapscanner.ManagerConfig{},
+				)
+				zapServer := NewZapServer(zapStore, zapManager)
+				pb.RegisterZapServiceServer(grpcServer, zapServer)
+				log.Printf("ZAP service enabled")
+			}
+		}
+	}
+
 	// Setup audit logging store and event subscriber
 	var auditStore *audit.Store
 	var auditEventSubscriber *audit.EventSubscriber
@@ -775,6 +803,8 @@ skipAppHosting:
 		alertDeliveryStore:   containerServer.alertDeliveryStore,
 		pentestManager:       pentestManager,
 		pentestStore:         pentestStore,
+		zapManager:           zapManager,
+		zapStore:             zapStore,
 	}, nil
 }
 
@@ -802,6 +832,12 @@ func (ds *DualServer) Start(ctx context.Context) error {
 	if ds.pentestManager != nil {
 		ds.pentestManager.Start(ctx)
 		log.Printf("Pentest manager started")
+	}
+
+	// Start ZAP manager if available
+	if ds.zapManager != nil {
+		ds.zapManager.Start(ctx)
+		log.Printf("ZAP manager started")
 	}
 
 	// Start audit event subscriber if available
@@ -934,6 +970,12 @@ func (ds *DualServer) Start(ctx context.Context) error {
 		}
 		if ds.pentestStore != nil {
 			ds.pentestStore.Close()
+		}
+		if ds.zapManager != nil {
+			ds.zapManager.Stop()
+		}
+		if ds.zapStore != nil {
+			ds.zapStore.Close()
 		}
 		if ds.sshCollector != nil {
 			ds.sshCollector.Stop()
