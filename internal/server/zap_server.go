@@ -145,13 +145,16 @@ func (s *ZapServer) GetZapConfig(ctx context.Context, req *pb.GetZapConfigReques
 
 // GetZapReport downloads a scan report
 func (s *ZapServer) GetZapReport(ctx context.Context, req *pb.GetZapReportRequest) (*pb.GetZapReportResponse, error) {
-	// For now, generate a report from current ZAP state
-	// In the future, we could store reports per scan run
 	if s.manager == nil || !s.manager.ZapAvailable() {
 		return nil, fmt.Errorf("ZAP scanner is not available")
 	}
 
 	scanner := zapscanner.NewScanner()
+
+	// Ensure the ZAP daemon is running before generating a report
+	if err := scanner.EnsureDaemonRunning(ctx); err != nil {
+		return nil, fmt.Errorf("ZAP daemon not available for report generation: %w", err)
+	}
 
 	format := req.Format
 	if format == "" {
