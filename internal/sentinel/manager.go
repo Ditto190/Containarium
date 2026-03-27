@@ -2,7 +2,9 @@ package sentinel
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -54,9 +56,8 @@ type Manager struct {
 	certStore       *CertStore
 	keyStore        *KeyStore
 
-	// Tunnel mode: ConnMux-based HTTPS handling
-	httpsListener  net.Listener // from ConnMux, set externally before Run()
-	stopHTTPSProxy func()       // stops the current HTTPS proxy goroutine
+	// Tunnel/hybrid mode: ConnMux-based HTTPS handling
+	httpsDispatch  *dispatchListener // from ConnMux, dispatches to proxy or maintenance
 
 	// Recovery tracking
 	outageStart    time.Time // when the current outage began
@@ -77,9 +78,10 @@ func NewManager(config Config, provider CloudProvider) *Manager {
 	return m
 }
 
-// SetHTTPSListener sets an external HTTPS listener (from ConnMux) for tunnel/hybrid mode.
-func (m *Manager) SetHTTPSListener(ln net.Listener) {
-	m.httpsListener = ln
+// SetHTTPSListener sets a ConnMux HTTPS chanListener for tunnel/hybrid mode.
+// The manager wraps it in a dispatchListener to swap between proxy and maintenance.
+func (m *Manager) SetHTTPSListener(ln *chanListener) {
+	m.httpsDispatch = newDispatchListener(ln)
 }
 
 // Run is the main loop. Blocks until ctx is cancelled.
@@ -316,7 +318,7 @@ func (m *Manager) switchToProxy(backend *Backend) error {
 
 	// Handle port 443 via ConnMux if available (tunnel/hybrid mode)
 	forwardedPorts := m.config.ForwardedPorts
-	if m.httpsListener != nil {
+	if m.httpsDispatch != nil {
 		forwardedPorts = excludePort(forwardedPorts, m.config.HTTPSPort)
 		m.startHTTPSProxy(backend.IP)
 	}
@@ -337,23 +339,23 @@ func (m *Manager) switchToMaintenance() error {
 		log.Printf("[sentinel] warning: failed to disable forwarding: %v", err)
 	}
 
-	if m.stopHTTPSProxy != nil {
-		m.stopHTTPSProxy()
-		m.stopHTTPSProxy = nil
-	}
-
 	m.mu.Lock()
 	m.primary = nil
 	m.mu.Unlock()
 
+	// If ConnMux is active, switch HTTPS dispatch to maintenance mode
+	if m.httpsDispatch != nil {
+		m.setHTTPSMaintenanceHandler()
+	}
+
 	if m.stopMaintenance == nil {
-		if m.httpsListener != nil {
+		if m.httpsDispatch != nil {
+			// ConnMux mode: only start HTTP maintenance on port 80
 			stop, err := startMaintenanceHTTPOnly(m.config.HTTPPort, m)
 			if err != nil {
 				return err
 			}
 			m.stopMaintenance = stop
-			m.startHTTPSMaintenance()
 		} else {
 			stop, err := startMaintenanceServers(m.config.HTTPPort, m.config.HTTPSPort, m.certStore, m)
 			if err != nil {
@@ -368,42 +370,65 @@ func (m *Manager) switchToMaintenance() error {
 	return nil
 }
 
-// startHTTPSProxy starts proxying HTTPS connections from the ConnMux to a backend.
+// startHTTPSProxy sets the dispatch handler to proxy HTTPS to a backend.
 func (m *Manager) startHTTPSProxy(backendIP string) {
-	if m.stopHTTPSProxy != nil {
-		m.stopHTTPSProxy()
-	}
-
 	target := net.JoinHostPort(backendIP, fmt.Sprintf("%d", m.config.HTTPSPort))
-	proxy := &HTTPSProxy{target: target}
-
-	go func() {
-		proxy.Serve(m.httpsListener)
-	}()
-
-	m.stopHTTPSProxy = func() {}
+	m.httpsDispatch.SetHandler(func(conn net.Conn) {
+		defer conn.Close()
+		dst, err := net.DialTimeout("tcp", target, 5*time.Second)
+		if err != nil {
+			return
+		}
+		defer dst.Close()
+		done := make(chan struct{}, 2)
+		go func() { io.Copy(dst, conn); done <- struct{}{} }()
+		go func() { io.Copy(conn, dst); done <- struct{}{} }()
+		<-done
+	})
 	log.Printf("[sentinel] HTTPS proxy started → %s", target)
 }
 
-// startHTTPSMaintenance serves the maintenance page on HTTPS connections from the ConnMux.
-func (m *Manager) startHTTPSMaintenance() {
-	srv := NewMaintenanceTLSServer(0, m.certStore, m)
-
-	go func() {
-		log.Printf("[sentinel] maintenance HTTPS server on ConnMux listener")
-		if err := srv.ServeTLS(m.httpsListener, "", ""); err != nil {
-			log.Printf("[sentinel] maintenance HTTPS (mux) stopped: %v", err)
-		}
-	}()
-
-	origStop := m.stopMaintenance
-	m.stopMaintenance = func() {
-		srv.Close()
-		if origStop != nil {
-			origStop()
+// setHTTPSMaintenanceHandler sets the dispatch handler to serve maintenance TLS page.
+func (m *Manager) setHTTPSMaintenanceHandler() {
+	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	if m.certStore != nil {
+		tlsCfg.GetCertificate = m.certStore.GetCertificate
+	} else {
+		cert, err := generateSelfSignedCert()
+		if err == nil {
+			tlsCfg.Certificates = []tls.Certificate{cert}
 		}
 	}
+
+	handler := maintenanceHandler()
+
+	m.httpsDispatch.SetHandler(func(conn net.Conn) {
+		tlsConn := tls.Server(conn, tlsCfg)
+		defer tlsConn.Close()
+		if err := tlsConn.Handshake(); err != nil {
+			return
+		}
+		// Serve one HTTP request over the TLS connection
+		http.Serve(&singleConnListener{conn: tlsConn}, handler)
+	})
+	log.Printf("[sentinel] maintenance HTTPS handler set on ConnMux")
 }
+
+// singleConnListener is a net.Listener that serves exactly one connection.
+type singleConnListener struct {
+	conn net.Conn
+	done bool
+}
+
+func (sl *singleConnListener) Accept() (net.Conn, error) {
+	if sl.done {
+		return nil, net.ErrClosed
+	}
+	sl.done = true
+	return sl.conn, nil
+}
+func (sl *singleConnListener) Close() error   { return nil }
+func (sl *singleConnListener) Addr() net.Addr { return sl.conn.LocalAddr() }
 
 func startMaintenanceHTTPOnly(httpPort int, manager *Manager) (stop func(), err error) {
 	httpSrv := NewMaintenanceServer(httpPort, manager)

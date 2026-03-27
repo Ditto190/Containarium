@@ -110,7 +110,10 @@ func runSentinel(cmd *cobra.Command, args []string) error {
 			tunnelToken = os.Getenv("CONTAINARIUM_TUNNEL_TOKEN")
 		}
 		if tunnelToken != "" {
-			log.Printf("[sentinel] hybrid mode: GCP + tunnel (accepting tunnel connections on port %d)", sentinelHTTPSPort)
+			// Hybrid mode: GCP + tunnel on the same port 443 via ConnMux.
+			// The ConnMux peeks the first byte to route tunnel ({) vs HTTPS (0x16).
+			// HTTPS is proxied as raw TCP to the spot VM (Caddy handles TLS via SNI).
+			log.Printf("[sentinel] hybrid mode: GCP + tunnel (ConnMux on port %d)", sentinelHTTPSPort)
 
 			config := sentinel.Config{
 				HealthPort:         sentinelHealthPort,
@@ -129,7 +132,7 @@ func runSentinel(cmd *cobra.Command, args []string) error {
 
 			manager := sentinel.NewManager(config, gcpProvider)
 
-			// Start ConnMux on port 443
+			// Start ConnMux on port 443 — multiplexes tunnel and HTTPS
 			muxAddr := fmt.Sprintf(":%d", sentinelHTTPSPort)
 			connMux, err := sentinel.NewConnMux(muxAddr)
 			if err != nil {
@@ -141,7 +144,7 @@ func runSentinel(cmd *cobra.Command, args []string) error {
 			tunnelServer := sentinel.NewTunnelServer("", tunnelToken, registry)
 			tunnelServer.OnConnect = manager.OnTunnelConnect
 			tunnelServer.OnDisconnect = manager.OnTunnelDisconnect
-			manager.SetHTTPSListener(connMux.HTTPSListener())
+			manager.SetHTTPSListener(connMux.HTTPSChanListener())
 
 			sigChan := make(chan os.Signal, 1)
 			signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -208,7 +211,7 @@ func runSentinel(cmd *cobra.Command, args []string) error {
 		tunnelServer := sentinel.NewTunnelServer("", tunnelToken, registry)
 		tunnelServer.OnConnect = manager.OnTunnelConnect
 		tunnelServer.OnDisconnect = manager.OnTunnelDisconnect
-		manager.SetHTTPSListener(connMux.HTTPSListener())
+		manager.SetHTTPSListener(connMux.HTTPSChanListener())
 
 		// Graceful shutdown on signals
 		sigChan := make(chan os.Signal, 1)

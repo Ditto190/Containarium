@@ -53,6 +53,12 @@ func (cm *ConnMux) HTTPSListener() net.Listener {
 	return cm.httpsLn
 }
 
+// HTTPSChanListener returns the underlying chanListener for HTTPS.
+// Used by Manager to create a dispatchListener for swapping consumers.
+func (cm *ConnMux) HTTPSChanListener() *chanListener {
+	return cm.httpsLn
+}
+
 // Run accepts connections and routes them. Blocks until the listener is closed.
 func (cm *ConnMux) Run() {
 	log.Printf("[conn-mux] multiplexing on %s (tunnel + HTTPS)", cm.listener.Addr())
@@ -165,6 +171,47 @@ func (cl *chanListener) Enqueue(conn net.Conn) {
 	case <-cl.closed:
 		conn.Close()
 	}
+}
+
+// dispatchListener wraps a chanListener with a dispatch mechanism.
+// Connections from the inner listener are sent to whichever consumer
+// is currently registered via SetHandler. This allows swapping between
+// maintenance server and HTTPS proxy without closing the shared listener.
+type dispatchListener struct {
+	inner   *chanListener
+	mu      sync.RWMutex
+	handler func(net.Conn) // current connection handler
+}
+
+func newDispatchListener(inner *chanListener) *dispatchListener {
+	dl := &dispatchListener{inner: inner}
+	// Start a goroutine that pulls from the chanListener and dispatches
+	go dl.dispatch()
+	return dl
+}
+
+func (dl *dispatchListener) dispatch() {
+	for {
+		conn, err := dl.inner.Accept()
+		if err != nil {
+			return
+		}
+		dl.mu.RLock()
+		h := dl.handler
+		dl.mu.RUnlock()
+		if h != nil {
+			go h(conn)
+		} else {
+			conn.Close()
+		}
+	}
+}
+
+// SetHandler sets the function that handles incoming HTTPS connections.
+func (dl *dispatchListener) SetHandler(h func(net.Conn)) {
+	dl.mu.Lock()
+	dl.handler = h
+	dl.mu.Unlock()
 }
 
 // HTTPSProxy proxies connections from a listener to a target address.
