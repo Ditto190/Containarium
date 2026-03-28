@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-03-28
+
 ### Added
 - **Multi-backend peer operations** — Resize, CleanupDisk, and Collaborator operations (Add/Remove/List) now forward to peer backends when the container is not local
 - **Terminal WebSocket peer routing** — Terminal sessions proxy to peer backends transparently via `PeerTerminalProxy` interface; the gateway bridges WebSocket connections between client and peer
