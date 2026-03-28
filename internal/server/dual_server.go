@@ -412,7 +412,7 @@ skipAppHosting:
 	} else if postgresConnString == "" {
 		postgresConnString = os.Getenv("CONTAINARIUM_POSTGRES_URL")
 		if postgresConnString == "" {
-			postgresConnString = "postgres://containarium:containarium@10.100.0.2:5432/containarium?sslmode=disable"
+			postgresConnString = "postgres://containarium:containarium@10.100.0.2:5432/containarium?sslmode=disable" // #nosec G101 -- default dev credentials for local Incus container Postgres
 		}
 	}
 

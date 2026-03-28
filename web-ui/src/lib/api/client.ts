@@ -76,7 +76,7 @@ function transformContainer(apiContainer: Record<string, unknown>): Container {
     cpu: ((apiContainer.resources as Record<string, unknown>)?.cpu as string) || '',
     memory: ((apiContainer.resources as Record<string, unknown>)?.memory as string) || '',
     disk: ((apiContainer.resources as Record<string, unknown>)?.disk as string) || '',
-    gpu: ((apiContainer.resources as Record<string, unknown>)?.gpu as string) || '',
+    gpu: (apiContainer.gpuDevice as string) || ((apiContainer.resources as Record<string, unknown>)?.gpu as string) || '',
     image: (apiContainer.image as string) || '',
     podmanEnabled: (apiContainer.podmanEnabled as boolean) || false,
     stack: (apiContainer.stack as string) || '',
