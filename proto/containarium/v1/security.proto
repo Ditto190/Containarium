@@ -35,6 +35,9 @@ message ClamavReport {
 
   // When the report was created in the database
   string created_at = 9;
+
+  // Backend ID identifying which node performed the scan
+  string backend_id = 10;
 }
 
 // ClamavContainerSummary provides per-container scan summary
@@ -59,6 +62,9 @@ message ClamavContainerSummary {
 
   // Number of scans that found infections
   int32 infected_scans = 7;
+
+  // Backend ID identifying which node owns this container
+  string backend_id = 8;
 }
 
 // ============= Request/Response Messages =============
@@ -154,6 +160,9 @@ message ScanJob {
 
   // When the job completed (ISO 8601)
   string completed_at = 9;
+
+  // Backend ID identifying which node owns this job
+  string backend_id = 10;
 }
 
 message GetScanStatusRequest {}

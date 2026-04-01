@@ -473,6 +473,50 @@ func (pc *PeerClient) ForwardSecuritySummary(authToken string) ([]byte, error) {
 	return body, nil
 }
 
+// ForwardSecurityReports fetches ClamAV scan reports from a peer.
+func (pc *PeerClient) ForwardSecurityReports(authToken string, queryParams string) ([]byte, error) {
+	path := "/v1/security/clamav-reports"
+	if queryParams != "" {
+		path = path + "?" + queryParams
+	}
+	body, status, err := pc.ForwardRequest("GET", path, authToken, nil)
+	if err != nil {
+		return nil, fmt.Errorf("forward security reports to %s: %w", pc.ID, err)
+	}
+	if status >= 400 {
+		return nil, fmt.Errorf("peer %s returned status %d for security reports", pc.ID, status)
+	}
+	return body, nil
+}
+
+// ForwardScanStatus fetches scan job status from a peer.
+func (pc *PeerClient) ForwardScanStatus(authToken string) ([]byte, error) {
+	body, status, err := pc.ForwardRequest("GET", "/v1/security/scan-status", authToken, nil)
+	if err != nil {
+		return nil, fmt.Errorf("forward scan status to %s: %w", pc.ID, err)
+	}
+	if status >= 400 {
+		return nil, fmt.Errorf("peer %s returned status %d for scan status", pc.ID, status)
+	}
+	return body, nil
+}
+
+// ForwardTriggerScan triggers a ClamAV scan on a peer.
+func (pc *PeerClient) ForwardTriggerScan(authToken string, containerName string) ([]byte, error) {
+	payload := []byte(`{}`)
+	if containerName != "" {
+		payload = []byte(fmt.Sprintf(`{"container_name":"%s"}`, containerName))
+	}
+	body, status, err := pc.ForwardRequest("POST", "/v1/security/clamav-scan", authToken, payload)
+	if err != nil {
+		return nil, fmt.Errorf("forward trigger scan to %s: %w", pc.ID, err)
+	}
+	if status >= 400 {
+		return nil, fmt.Errorf("peer %s returned status %d for trigger scan", pc.ID, status)
+	}
+	return body, nil
+}
+
 // ForwardContainerTraffic fetches traffic data for a container on a peer.
 func (pc *PeerClient) ForwardContainerTraffic(authToken string, path string) ([]byte, error) {
 	body, status, err := pc.ForwardRequest("GET", path, authToken, nil)

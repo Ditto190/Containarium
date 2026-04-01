@@ -406,11 +406,51 @@ func NewDualServer(config *DualServerConfig) (*DualServer, error) {
 	}
 skipAppHosting:
 
+	// For standalone peers (or any daemon without app hosting), ensure
+	// core-postgres is provisioned so security scanning and other DB-dependent
+	// features work. This follows the federated architecture where each node
+	// is self-sufficient.
+	if postgresConnString == "" && !config.EnableAppHosting {
+		if envPG := os.Getenv("CONTAINARIUM_POSTGRES_URL"); envPG != "" {
+			postgresConnString = envPG
+		} else {
+			// Try to auto-detect existing postgres container first
+			if incusClient, err := incus.New(); err == nil {
+				if pgInfo, err := incusClient.FindContainerByRole(incus.RolePostgres); err == nil && pgInfo.IPAddress != "" {
+					postgresConnString = fmt.Sprintf(
+						"postgres://%s:%s@%s:%d/%s?sslmode=disable",
+						DefaultPostgresUser, DefaultPostgresPassword,
+						pgInfo.IPAddress, DefaultPostgresPort, DefaultPostgresDB)
+					log.Printf("Detected existing PostgreSQL at: %s", pgInfo.IPAddress)
+				} else {
+					// No postgres container found — provision one
+					log.Printf("Provisioning core-postgres for local security scanning...")
+					networkCIDR := "10.100.0.0/24"
+					if subnet, err := incusClient.GetNetworkSubnet("incusbr0"); err == nil {
+						networkCIDR = subnet
+					}
+					cs := NewCoreServices(incusClient, CoreServicesConfig{
+						NetworkCIDR: networkCIDR,
+					})
+					connString, err := cs.EnsurePostgres(context.Background())
+					if err != nil {
+						log.Printf("Warning: Failed to provision core-postgres: %v. DB-dependent features disabled.", err)
+					} else {
+						postgresConnString = connString
+						log.Printf("Core PostgreSQL ready: %s", cs.GetPostgresIP())
+						// Keep coreServices reference for security container provisioning
+						if coreServices == nil {
+							coreServices = cs
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// Setup collaborator store and manager (independent of app hosting)
 	// postgresConnString was set by app hosting setup above, or from config
-	if config.Standalone {
-		postgresConnString = ""
-	} else if postgresConnString == "" {
+	if postgresConnString == "" {
 		postgresConnString = os.Getenv("CONTAINARIUM_POSTGRES_URL")
 		if postgresConnString == "" {
 			postgresConnString = "postgres://containarium:containarium@10.100.0.2:5432/containarium?sslmode=disable" // #nosec G101 -- default dev credentials for local Incus container Postgres

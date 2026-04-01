@@ -171,7 +171,7 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	// This prevents the race condition where the daemon starts before core
 	// containers are fully booted after a spot VM preemption/restart.
 	if standaloneMode {
-		log.Printf("Standalone mode: skipping core containers and PostgreSQL")
+		log.Printf("Standalone mode: skipping core container wait (Caddy)")
 	} else {
 		if err := waitForCoreContainers(incusClient, 2*time.Minute); err != nil {
 			log.Printf("Warning: %v", err)
@@ -224,9 +224,7 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	}
 
 	// Auto-detect PostgreSQL container IP if no --postgres flag specified
-	if standaloneMode {
-		postgresConnString = "" // Skip PostgreSQL in standalone mode
-	} else if postgresConnString == "" {
+	if postgresConnString == "" {
 		if pgInfo, err := incusClient.FindContainerByRole(incus.RolePostgres); err == nil && pgInfo.IPAddress != "" {
 			postgresConnString = fmt.Sprintf(
 				"postgres://%s:%s@%s:%d/%s?sslmode=disable",

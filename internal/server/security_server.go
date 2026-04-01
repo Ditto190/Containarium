@@ -2,28 +2,35 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/footprintai/containarium/internal/incus"
 	"github.com/footprintai/containarium/internal/security"
 	pb "github.com/footprintai/containarium/pkg/pb/containarium/v1"
-	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 // SecurityServer implements the SecurityService gRPC service
 type SecurityServer struct {
 	pb.UnimplementedSecurityServiceServer
-	store       *security.Store
-	incusClient *incus.Client
-	scanner     *security.Scanner
-	peerPool    *PeerPool
+	store          *security.Store
+	incusClient    *incus.Client
+	scanner        *security.Scanner
+	peerPool       *PeerPool
+	localBackendID string
 }
 
 // SetPeerPool sets the peer pool for including peer containers in security summaries.
 func (s *SecurityServer) SetPeerPool(pool *PeerPool) {
 	s.peerPool = pool
+	if pool != nil {
+		s.localBackendID = pool.LocalBackendID()
+	}
 }
 
 // NewSecurityServer creates a new security server
@@ -51,10 +58,91 @@ func (s *SecurityServer) ListClamavReports(ctx context.Context, req *pb.ListClam
 		return nil, fmt.Errorf("failed to list reports: %w", err)
 	}
 
+	// Tag local reports with backend_id
+	for _, r := range reports {
+		if r.BackendId == "" {
+			r.BackendId = s.localBackendID
+		}
+	}
+
+	// Merge reports from peers
+	if s.peerPool != nil {
+		authToken := extractAuthToken(ctx)
+		peerReports := s.fetchPeerReports(authToken, req)
+		reports = append(reports, peerReports...)
+		totalCount += int32(len(peerReports))
+	}
+
 	return &pb.ListClamavReportsResponse{
 		Reports:    reports,
 		TotalCount: totalCount,
 	}, nil
+}
+
+// fetchPeerReports fetches ClamAV reports from all peers in parallel.
+func (s *SecurityServer) fetchPeerReports(authToken string, req *pb.ListClamavReportsRequest) []*pb.ClamavReport {
+	peers := s.peerPool.Peers()
+	if len(peers) == 0 {
+		return nil
+	}
+
+	// Build query params
+	var qp []string
+	if req.ContainerName != "" {
+		qp = append(qp, "container_name="+req.ContainerName)
+	}
+	if req.Status != "" {
+		qp = append(qp, "status="+req.Status)
+	}
+	if req.From != "" {
+		qp = append(qp, "from="+req.From)
+	}
+	if req.To != "" {
+		qp = append(qp, "to="+req.To)
+	}
+	if req.Limit > 0 {
+		qp = append(qp, fmt.Sprintf("limit=%d", req.Limit))
+	}
+	queryParams := strings.Join(qp, "&")
+
+	type result struct {
+		reports []*pb.ClamavReport
+	}
+
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	var all []*pb.ClamavReport
+
+	for _, peer := range peers {
+		if !peer.Healthy {
+			continue
+		}
+		wg.Add(1)
+		go func(pc *PeerClient) {
+			defer wg.Done()
+			body, err := pc.ForwardSecurityReports(authToken, queryParams)
+			if err != nil {
+				log.Printf("[security] failed to fetch reports from peer %s: %v", pc.ID, err)
+				return
+			}
+			var resp pb.ListClamavReportsResponse
+			if err := protojson.Unmarshal(body, &resp); err != nil {
+				log.Printf("[security] failed to parse reports from peer %s: %v", pc.ID, err)
+				return
+			}
+			// Tag with backend_id
+			for _, r := range resp.Reports {
+				if r.BackendId == "" {
+					r.BackendId = pc.ID
+				}
+			}
+			mu.Lock()
+			all = append(all, resp.Reports...)
+			mu.Unlock()
+		}(peer)
+	}
+	wg.Wait()
+	return all
 }
 
 // GetClamavSummary returns a summary of ClamAV scan status across all containers
@@ -65,11 +153,12 @@ func (s *SecurityServer) GetClamavSummary(ctx context.Context, req *pb.GetClamav
 		return nil, fmt.Errorf("failed to get summaries: %w", err)
 	}
 
-	// Build a map of scanned containers
+	// Tag local summaries with backend_id
 	scannedMap := make(map[string]bool)
 	cleanCount := int32(0)
 	infectedCount := int32(0)
 	for _, sum := range summaries {
+		sum.BackendId = s.localBackendID
 		scannedMap[sum.ContainerName] = true
 		if sum.LastStatus == "clean" {
 			cleanCount++
@@ -78,7 +167,7 @@ func (s *SecurityServer) GetClamavSummary(ctx context.Context, req *pb.GetClamav
 		}
 	}
 
-	// Get all running containers to find never-scanned ones
+	// Get all running local containers to find never-scanned ones
 	neverScanned := int32(0)
 	if s.incusClient != nil {
 		containers, err := s.incusClient.ListContainers()
@@ -97,35 +186,21 @@ func (s *SecurityServer) GetClamavSummary(ctx context.Context, req *pb.GetClamav
 						ContainerName: c.Name,
 						Username:      username,
 						LastStatus:    "never",
+						BackendId:     s.localBackendID,
 					})
 				}
 			}
 		}
 	}
 
-	// Include peer containers as "never scanned"
+	// Fetch and merge peer security summaries (federated scanning)
 	if s.peerPool != nil {
-		authToken := ""
-		if md, ok := metadata.FromIncomingContext(ctx); ok {
-			if vals := md.Get("authorization"); len(vals) > 0 {
-				authToken = strings.TrimPrefix(vals[0], "Bearer ")
-			}
-		}
-		peerContainers := s.peerPool.ListContainers(authToken)
-		for _, c := range peerContainers {
-			if !scannedMap[c.Name] {
-				neverScanned++
-				username := c.Name
-				if strings.HasSuffix(c.Name, "-container") {
-					username = strings.TrimSuffix(c.Name, "-container")
-				}
-				summaries = append(summaries, &pb.ClamavContainerSummary{
-					ContainerName: c.Name,
-					Username:      username,
-					LastStatus:    "never",
-				})
-			}
-		}
+		authToken := extractAuthToken(ctx)
+		peerSummaries, peerClean, peerInfected, peerNever := s.fetchPeerSummaries(authToken)
+		summaries = append(summaries, peerSummaries...)
+		cleanCount += peerClean
+		infectedCount += peerInfected
+		neverScanned += peerNever
 	}
 
 	return &pb.GetClamavSummaryResponse{
@@ -138,14 +213,81 @@ func (s *SecurityServer) GetClamavSummary(ctx context.Context, req *pb.GetClamav
 	}, nil
 }
 
+// fetchPeerSummaries fetches ClamAV summaries from all peers in parallel.
+// Returns merged summaries and aggregate counts.
+func (s *SecurityServer) fetchPeerSummaries(authToken string) (summaries []*pb.ClamavContainerSummary, clean, infected, never int32) {
+	peers := s.peerPool.Peers()
+	if len(peers) == 0 {
+		return
+	}
+
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, peer := range peers {
+		if !peer.Healthy {
+			continue
+		}
+		wg.Add(1)
+		go func(pc *PeerClient) {
+			defer wg.Done()
+			body, err := pc.ForwardSecuritySummary(authToken)
+			if err != nil {
+				log.Printf("[security] failed to fetch summary from peer %s: %v", pc.ID, err)
+				return
+			}
+			var resp pb.GetClamavSummaryResponse
+			if err := protojson.Unmarshal(body, &resp); err != nil {
+				log.Printf("[security] failed to parse summary from peer %s: %v", pc.ID, err)
+				return
+			}
+			// Tag containers with peer's backend_id
+			for _, c := range resp.Containers {
+				if c.BackendId == "" {
+					c.BackendId = pc.ID
+				}
+			}
+			mu.Lock()
+			summaries = append(summaries, resp.Containers...)
+			clean += resp.CleanContainers
+			infected += resp.InfectedContainers
+			never += resp.NeverScannedContainers
+			mu.Unlock()
+		}(peer)
+	}
+	wg.Wait()
+	return
+}
+
 // TriggerClamavScan enqueues scan jobs asynchronously and returns immediately
 func (s *SecurityServer) TriggerClamavScan(ctx context.Context, req *pb.TriggerClamavScanRequest) (*pb.TriggerClamavScanResponse, error) {
 	if s.scanner == nil {
 		return nil, fmt.Errorf("security scanner is not available")
 	}
 
+	authToken := extractAuthToken(ctx)
+
 	if req.ContainerName != "" {
-		// Enqueue a single container scan
+		// Check if this container is on a peer
+		if s.peerPool != nil {
+			username := req.ContainerName
+			if strings.HasSuffix(username, "-container") {
+				username = strings.TrimSuffix(username, "-container")
+			}
+			if peer := s.peerPool.FindContainerPeer(username, authToken); peer != nil {
+				// Forward scan to the peer that owns this container
+				_, err := peer.ForwardTriggerScan(authToken, req.ContainerName)
+				if err != nil {
+					return nil, fmt.Errorf("failed to trigger scan on peer %s: %w", peer.ID, err)
+				}
+				return &pb.TriggerClamavScanResponse{
+					Message:      fmt.Sprintf("Scan queued for container %s on peer %s", req.ContainerName, peer.ID),
+					ScannedCount: 1,
+				}, nil
+			}
+		}
+
+		// Local container scan
 		username := req.ContainerName
 		if strings.HasSuffix(req.ContainerName, "-container") {
 			username = strings.TrimSuffix(req.ContainerName, "-container")
@@ -159,15 +301,60 @@ func (s *SecurityServer) TriggerClamavScan(ctx context.Context, req *pb.TriggerC
 		}, nil
 	}
 
-	// Enqueue scans for all running user containers
+	// Enqueue scans for all running local user containers
 	count, err := s.scanner.EnqueueAll(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("enqueue all failed: %w", err)
 	}
+
+	// Also trigger scans on all peers
+	peerCount := int32(0)
+	if s.peerPool != nil {
+		peerCount = s.triggerPeerScans(authToken)
+	}
+
+	totalCount := int32(count) + peerCount
 	return &pb.TriggerClamavScanResponse{
-		Message:      fmt.Sprintf("%d scan jobs queued", count),
-		ScannedCount: int32(count),
+		Message:      fmt.Sprintf("%d scan jobs queued (%d local, %d on peers)", totalCount, count, peerCount),
+		ScannedCount: totalCount,
 	}, nil
+}
+
+// triggerPeerScans triggers scan-all on each healthy peer in parallel.
+func (s *SecurityServer) triggerPeerScans(authToken string) int32 {
+	peers := s.peerPool.Peers()
+	if len(peers) == 0 {
+		return 0
+	}
+
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	total := int32(0)
+
+	for _, peer := range peers {
+		if !peer.Healthy {
+			continue
+		}
+		wg.Add(1)
+		go func(pc *PeerClient) {
+			defer wg.Done()
+			body, err := pc.ForwardTriggerScan(authToken, "")
+			if err != nil {
+				log.Printf("[security] failed to trigger scan on peer %s: %v", pc.ID, err)
+				return
+			}
+			var resp struct {
+				ScannedCount int32 `json:"scannedCount"`
+			}
+			if err := json.Unmarshal(body, &resp); err == nil {
+				mu.Lock()
+				total += resp.ScannedCount
+				mu.Unlock()
+			}
+		}(peer)
+	}
+	wg.Wait()
+	return total
 }
 
 // GetScanStatus returns the current state of the scan job queue
@@ -187,6 +374,7 @@ func (s *SecurityServer) GetScanStatus(ctx context.Context, req *pb.GetScanStatu
 			RetryCount:    int32(j.RetryCount),
 			ErrorMessage:  j.ErrorMessage,
 			CreatedAt:     j.CreatedAt.Format(time.RFC3339),
+			BackendId:     s.localBackendID,
 		}
 		if j.StartedAt != nil {
 			pbJob.StartedAt = j.StartedAt.Format(time.RFC3339)
@@ -208,5 +396,56 @@ func (s *SecurityServer) GetScanStatus(ctx context.Context, req *pb.GetScanStatu
 		}
 	}
 
+	// Merge scan status from peers
+	if s.peerPool != nil {
+		authToken := extractAuthToken(ctx)
+		s.mergePeerScanStatus(authToken, resp)
+	}
+
 	return resp, nil
+}
+
+// mergePeerScanStatus fetches scan job status from all peers and merges into resp.
+func (s *SecurityServer) mergePeerScanStatus(authToken string, resp *pb.GetScanStatusResponse) {
+	peers := s.peerPool.Peers()
+	if len(peers) == 0 {
+		return
+	}
+
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, peer := range peers {
+		if !peer.Healthy {
+			continue
+		}
+		wg.Add(1)
+		go func(pc *PeerClient) {
+			defer wg.Done()
+			body, err := pc.ForwardScanStatus(authToken)
+			if err != nil {
+				log.Printf("[security] failed to fetch scan status from peer %s: %v", pc.ID, err)
+				return
+			}
+			var peerResp pb.GetScanStatusResponse
+			if err := protojson.Unmarshal(body, &peerResp); err != nil {
+				log.Printf("[security] failed to parse scan status from peer %s: %v", pc.ID, err)
+				return
+			}
+			// Tag peer jobs with backend_id
+			for _, j := range peerResp.Jobs {
+				if j.BackendId == "" {
+					j.BackendId = pc.ID
+				}
+			}
+			mu.Lock()
+			resp.Jobs = append(resp.Jobs, peerResp.Jobs...)
+			resp.PendingCount += peerResp.PendingCount
+			resp.RunningCount += peerResp.RunningCount
+			resp.CompletedCount += peerResp.CompletedCount
+			resp.FailedCount += peerResp.FailedCount
+			mu.Unlock()
+		}(peer)
+	}
+	wg.Wait()
 }

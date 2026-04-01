@@ -11,6 +11,7 @@ export interface ClamavReport {
   scannedAt: string;
   scanDuration: string;
   createdAt: string;
+  backendId?: string;
 }
 
 /**
@@ -24,6 +25,7 @@ export interface ClamavContainerSummary {
   lastFindingsCount: number;
   totalScans: number;
   infectedScans: number;
+  backendId?: string;
 }
 
 /**
@@ -79,6 +81,7 @@ export interface ScanJob {
   createdAt: string;
   startedAt: string;
   completedAt: string;
+  backendId?: string;
 }
 
 /**
