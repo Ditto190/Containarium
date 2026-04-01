@@ -185,6 +185,11 @@ function ContainerRow({ container, server, onScan, scanStatus }: { container: Cl
             {container.containerName}
           </Box>
         </TableCell>
+        <TableCell>
+          <Typography variant="body2" sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>
+            {container.backendId || 'local'}
+          </Typography>
+        </TableCell>
         <TableCell>{container.username}</TableCell>
         <TableCell>{formatDate(container.lastScanAt)}</TableCell>
         <TableCell><StatusChip status={container.lastStatus} /></TableCell>
@@ -199,7 +204,7 @@ function ContainerRow({ container, server, onScan, scanStatus }: { container: Cl
         </TableCell>
       </TableRow>
       <TableRow>
-        <TableCell colSpan={7} sx={{ py: 0, borderBottom: expanded ? undefined : 'none' }}>
+        <TableCell colSpan={8} sx={{ py: 0, borderBottom: expanded ? undefined : 'none' }}>
           <Collapse in={expanded} timeout="auto" unmountOnExit>
             <Box sx={{ py: 1, pl: 4 }}>
               {historyLoading ? (
@@ -480,6 +485,7 @@ function ClamavView({ server }: SecurityViewProps) {
           <TableHead>
             <TableRow>
               <TableCell>Container</TableCell>
+              <TableCell>Node</TableCell>
               <TableCell>Username</TableCell>
               <TableCell>Last Scan</TableCell>
               <TableCell>Status</TableCell>
@@ -491,7 +497,7 @@ function ClamavView({ server }: SecurityViewProps) {
           <TableBody>
             {sortedContainers.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} align="center">
+                <TableCell colSpan={8} align="center">
                   <Typography color="text.secondary" sx={{ py: 4 }}>
                     No containers found. The security scanner runs every 24 hours.
                   </Typography>

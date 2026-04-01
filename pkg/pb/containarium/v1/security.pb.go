@@ -43,7 +43,9 @@ type ClamavReport struct {
 	// How long the scan took
 	ScanDuration string `protobuf:"bytes,8,opt,name=scan_duration,json=scanDuration,proto3" json:"scan_duration,omitempty"`
 	// When the report was created in the database
-	CreatedAt     string `protobuf:"bytes,9,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	CreatedAt string `protobuf:"bytes,9,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// Backend ID identifying which node performed the scan
+	BackendId     string `protobuf:"bytes,10,opt,name=backend_id,json=backendId,proto3" json:"backend_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -141,6 +143,13 @@ func (x *ClamavReport) GetCreatedAt() string {
 	return ""
 }
 
+func (x *ClamavReport) GetBackendId() string {
+	if x != nil {
+		return x.BackendId
+	}
+	return ""
+}
+
 // ClamavContainerSummary provides per-container scan summary
 type ClamavContainerSummary struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -158,6 +167,8 @@ type ClamavContainerSummary struct {
 	TotalScans int32 `protobuf:"varint,6,opt,name=total_scans,json=totalScans,proto3" json:"total_scans,omitempty"`
 	// Number of scans that found infections
 	InfectedScans int32 `protobuf:"varint,7,opt,name=infected_scans,json=infectedScans,proto3" json:"infected_scans,omitempty"`
+	// Backend ID identifying which node owns this container
+	BackendId     string `protobuf:"bytes,8,opt,name=backend_id,json=backendId,proto3" json:"backend_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -239,6 +250,13 @@ func (x *ClamavContainerSummary) GetInfectedScans() int32 {
 		return x.InfectedScans
 	}
 	return 0
+}
+
+func (x *ClamavContainerSummary) GetBackendId() string {
+	if x != nil {
+		return x.BackendId
+	}
+	return ""
 }
 
 type ListClamavReportsRequest struct {
@@ -630,7 +648,9 @@ type ScanJob struct {
 	// When the job started running (ISO 8601)
 	StartedAt string `protobuf:"bytes,8,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
 	// When the job completed (ISO 8601)
-	CompletedAt   string `protobuf:"bytes,9,opt,name=completed_at,json=completedAt,proto3" json:"completed_at,omitempty"`
+	CompletedAt string `protobuf:"bytes,9,opt,name=completed_at,json=completedAt,proto3" json:"completed_at,omitempty"`
+	// Backend ID identifying which node owns this job
+	BackendId     string `protobuf:"bytes,10,opt,name=backend_id,json=backendId,proto3" json:"backend_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -724,6 +744,13 @@ func (x *ScanJob) GetStartedAt() string {
 func (x *ScanJob) GetCompletedAt() string {
 	if x != nil {
 		return x.CompletedAt
+	}
+	return ""
+}
+
+func (x *ScanJob) GetBackendId() string {
+	if x != nil {
+		return x.BackendId
 	}
 	return ""
 }
@@ -846,7 +873,7 @@ var File_containarium_v1_security_proto protoreflect.FileDescriptor
 
 const file_containarium_v1_security_proto_rawDesc = "" +
 	"\n" +
-	"\x1econtainarium/v1/security.proto\x12\x0fcontainarium.v1\x1a\x1cgoogle/api/annotations.proto\x1a.protoc-gen-openapiv2/options/annotations.proto\"\x9f\x02\n" +
+	"\x1econtainarium/v1/security.proto\x12\x0fcontainarium.v1\x1a\x1cgoogle/api/annotations.proto\x1a.protoc-gen-openapiv2/options/annotations.proto\"\xbe\x02\n" +
 	"\fClamavReport\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\x12%\n" +
 	"\x0econtainer_name\x18\x02 \x01(\tR\rcontainerName\x12\x1a\n" +
@@ -858,7 +885,10 @@ const file_containarium_v1_security_proto_rawDesc = "" +
 	"scanned_at\x18\a \x01(\tR\tscannedAt\x12#\n" +
 	"\rscan_duration\x18\b \x01(\tR\fscanDuration\x12\x1d\n" +
 	"\n" +
-	"created_at\x18\t \x01(\tR\tcreatedAt\"\x96\x02\n" +
+	"created_at\x18\t \x01(\tR\tcreatedAt\x12\x1d\n" +
+	"\n" +
+	"backend_id\x18\n" +
+	" \x01(\tR\tbackendId\"\xb5\x02\n" +
 	"\x16ClamavContainerSummary\x12%\n" +
 	"\x0econtainer_name\x18\x01 \x01(\tR\rcontainerName\x12\x1a\n" +
 	"\busername\x18\x02 \x01(\tR\busername\x12 \n" +
@@ -869,7 +899,9 @@ const file_containarium_v1_security_proto_rawDesc = "" +
 	"\x13last_findings_count\x18\x05 \x01(\x05R\x11lastFindingsCount\x12\x1f\n" +
 	"\vtotal_scans\x18\x06 \x01(\x05R\n" +
 	"totalScans\x12%\n" +
-	"\x0einfected_scans\x18\a \x01(\x05R\rinfectedScans\"\xab\x01\n" +
+	"\x0einfected_scans\x18\a \x01(\x05R\rinfectedScans\x12\x1d\n" +
+	"\n" +
+	"backend_id\x18\b \x01(\tR\tbackendId\"\xab\x01\n" +
 	"\x18ListClamavReportsRequest\x12%\n" +
 	"\x0econtainer_name\x18\x01 \x01(\tR\rcontainerName\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x12\n" +
@@ -895,7 +927,7 @@ const file_containarium_v1_security_proto_rawDesc = "" +
 	"\x0econtainer_name\x18\x01 \x01(\tR\rcontainerName\"Z\n" +
 	"\x19TriggerClamavScanResponse\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x12#\n" +
-	"\rscanned_count\x18\x02 \x01(\x05R\fscannedCount\"\x9b\x02\n" +
+	"\rscanned_count\x18\x02 \x01(\x05R\fscannedCount\"\xba\x02\n" +
 	"\aScanJob\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\x12%\n" +
 	"\x0econtainer_name\x18\x02 \x01(\tR\rcontainerName\x12\x1a\n" +
@@ -908,7 +940,10 @@ const file_containarium_v1_security_proto_rawDesc = "" +
 	"created_at\x18\a \x01(\tR\tcreatedAt\x12\x1d\n" +
 	"\n" +
 	"started_at\x18\b \x01(\tR\tstartedAt\x12!\n" +
-	"\fcompleted_at\x18\t \x01(\tR\vcompletedAt\"\x16\n" +
+	"\fcompleted_at\x18\t \x01(\tR\vcompletedAt\x12\x1d\n" +
+	"\n" +
+	"backend_id\x18\n" +
+	" \x01(\tR\tbackendId\"\x16\n" +
 	"\x14GetScanStatusRequest\"\xdb\x01\n" +
 	"\x15GetScanStatusResponse\x12,\n" +
 	"\x04jobs\x18\x01 \x03(\v2\x18.containarium.v1.ScanJobR\x04jobs\x12#\n" +

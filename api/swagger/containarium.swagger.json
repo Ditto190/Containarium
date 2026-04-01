@@ -3514,6 +3514,10 @@
           "type": "integer",
           "format": "int32",
           "title": "Number of scans that found infections"
+        },
+        "backendId": {
+          "type": "string",
+          "title": "Backend ID identifying which node owns this container"
         }
       },
       "title": "ClamavContainerSummary provides per-container scan summary"
@@ -3558,6 +3562,10 @@
         "createdAt": {
           "type": "string",
           "title": "When the report was created in the database"
+        },
+        "backendId": {
+          "type": "string",
+          "title": "Backend ID identifying which node performed the scan"
         }
       },
       "title": "ClamavReport represents a single ClamAV scan result for a container"
@@ -5725,6 +5733,10 @@
         "completedAt": {
           "type": "string",
           "title": "When the job completed (ISO 8601)"
+        },
+        "backendId": {
+          "type": "string",
+          "title": "Backend ID identifying which node owns this job"
         }
       },
       "title": "ScanJob represents a queued ClamAV scan job"
