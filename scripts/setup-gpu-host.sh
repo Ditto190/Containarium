@@ -437,14 +437,52 @@ cat > "$BACKUP_SCRIPT" <<'BACKUPEOF'
 # Usage:
 #   containarium-zfs-backup              # run backup
 #   containarium-zfs-backup --list       # list snapshots
-#   containarium-zfs-backup --prune 7    # keep only last N snapshots
+#   containarium-zfs-backup --prune 7    # keep only last N snapshots per dataset
 #
-set -euo pipefail
+# Note: pipefail is intentionally NOT set. We want replication failures to be
+# non-fatal so that snapshot creation and pruning still happen.
+set -uo pipefail
 
 MAIN_POOL="incus-local"
 BACKUP_POOL="incus-backup/snapshots"
 SNAP_PREFIX="backup"
 KEEP_COUNT="${CONTAINARIUM_BACKUP_KEEP:-7}"
+
+# prune_snapshots keeps the N most recent backup snapshots PER dataset.
+# Listing all snapshots in the pool sorted globally would prune wrong:
+# 7 containers × 25 daily snapshots → "keep newest 7 globally" wipes
+# everything except today's backups across all containers.
+prune_snapshots() {
+    local pool="$1"
+    local keep="$2"
+
+    # Get unique datasets that have backup snapshots
+    local datasets
+    datasets=$(zfs list -t snapshot -r "$pool" -o name -H 2>/dev/null \
+        | grep "@${SNAP_PREFIX}-" \
+        | sed 's/@.*//' \
+        | sort -u)
+
+    while IFS= read -r ds; do
+        [ -z "$ds" ] && continue
+        # List this dataset's backup snapshots, newest first
+        local snaps
+        snaps=$(zfs list -t snapshot -o name -H -S creation "$ds" 2>/dev/null \
+            | grep "@${SNAP_PREFIX}-" || true)
+        local count=0
+        while IFS= read -r snap; do
+            [ -z "$snap" ] && continue
+            count=$((count + 1))
+            if [ "$count" -gt "$keep" ]; then
+                if zfs destroy "$snap" 2>/dev/null; then
+                    echo "  Destroyed $snap"
+                else
+                    echo "  Failed to destroy $snap (held or has clones, skipping)"
+                fi
+            fi
+        done <<< "$snaps"
+    done <<< "$datasets"
+}
 
 case "${1:-}" in
     --list)
@@ -452,25 +490,16 @@ case "${1:-}" in
         zfs list -t snapshot -r "$MAIN_POOL" -o name,creation,used 2>/dev/null || echo "  (none)"
         echo ""
         echo "=== Backup pool snapshots ==="
-        zfs list -t snapshot -r "$BACKUP_POOL" 2>/dev/null && \
-            zfs list -t snapshot -r "$BACKUP_POOL" -o name,creation,used || echo "  (none)"
+        zfs list -t snapshot -r "$BACKUP_POOL" -o name,creation,used 2>/dev/null || echo "  (none)"
         exit 0
         ;;
     --prune)
         KEEP_COUNT="${2:-$KEEP_COUNT}"
-        echo "Pruning snapshots, keeping last $KEEP_COUNT..."
-        for dataset in "$MAIN_POOL" "$BACKUP_POOL"; do
-            SNAPS=$(zfs list -t snapshot -r "$dataset" -o name -H -S creation 2>/dev/null | grep "@${SNAP_PREFIX}-" || true)
-            COUNT=0
-            while IFS= read -r snap; do
-                [ -z "$snap" ] && continue
-                COUNT=$((COUNT + 1))
-                if [ "$COUNT" -gt "$KEEP_COUNT" ]; then
-                    echo "  Destroying $snap"
-                    zfs destroy "$snap"
-                fi
-            done <<< "$SNAPS"
-        done
+        echo "Pruning snapshots, keeping last $KEEP_COUNT per dataset..."
+        prune_snapshots "$MAIN_POOL" "$KEEP_COUNT"
+        if zpool list incus-backup &>/dev/null; then
+            prune_snapshots "$BACKUP_POOL" "$KEEP_COUNT"
+        fi
         echo "Done."
         exit 0
         ;;
@@ -485,8 +514,14 @@ fi
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 SNAP_NAME="${SNAP_PREFIX}-${TIMESTAMP}"
 
+# Always prune at end, even if replication fails
+trap 'echo "==> Pruning old snapshots (keeping last $KEEP_COUNT per dataset)..."; prune_snapshots "$MAIN_POOL" "$KEEP_COUNT"; if zpool list incus-backup &>/dev/null; then prune_snapshots "$BACKUP_POOL" "$KEEP_COUNT"; fi; echo "==> Backup complete."' EXIT
+
 echo "==> Creating snapshot ${MAIN_POOL}@${SNAP_NAME}..."
-zfs snapshot -r "${MAIN_POOL}@${SNAP_NAME}"
+if ! zfs snapshot -r "${MAIN_POOL}@${SNAP_NAME}"; then
+    echo "ERROR: Snapshot creation failed"
+    exit 1
+fi
 
 if zpool list incus-backup &>/dev/null; then
     echo "==> Replicating to backup pool..."
@@ -497,47 +532,58 @@ if zpool list incus-backup &>/dev/null; then
         | grep -v "@${SNAP_NAME}" \
         | head -1 || true)
 
-    # Check if the previous snapshot exists on the backup pool
+    REPLICATION_OK=false
+
     if [ -n "$PREV_SNAP" ]; then
         PREV_TAG="${PREV_SNAP#*@}"
         if zfs list "${BACKUP_POOL}/${MAIN_POOL}@${PREV_TAG}" &>/dev/null 2>&1; then
-            # Incremental send
+            # Incremental send — try first
             echo "  Incremental send from @${PREV_TAG} to @${SNAP_NAME}"
-            zfs send -R -i "${MAIN_POOL}@${PREV_TAG}" "${MAIN_POOL}@${SNAP_NAME}" \
-                | zfs receive -F "${BACKUP_POOL}/${MAIN_POOL}"
+            if zfs send -R -i "${MAIN_POOL}@${PREV_TAG}" "${MAIN_POOL}@${SNAP_NAME}" \
+                | zfs receive -F "${BACKUP_POOL}/${MAIN_POOL}" 2>&1; then
+                REPLICATION_OK=true
+            else
+                # Common failure: backup pool's per-dataset snapshot lineage
+                # diverged from main pool (e.g. a previous receive failed
+                # partway, leaving some datasets out of sync). Recover by
+                # rolling back the backup pool to the last shared snapshot.
+                echo "  Incremental failed — attempting to repair divergent backup lineage"
+                # Find datasets where backup lacks the previous snapshot and
+                # roll back to the latest shared one. Easier: destroy backup
+                # and do full re-send. This is heavy but reliable.
+                echo "  Falling back to full re-send (this will overwrite backup)"
+                if zfs send -R "${MAIN_POOL}@${SNAP_NAME}" \
+                    | zfs receive -F "${BACKUP_POOL}/${MAIN_POOL}" 2>&1; then
+                    REPLICATION_OK=true
+                fi
+            fi
         else
             # Previous snapshot not on backup — full send
             echo "  Full send (previous snapshot not found on backup)"
-            zfs send -R "${MAIN_POOL}@${SNAP_NAME}" \
-                | zfs receive -F "${BACKUP_POOL}/${MAIN_POOL}"
+            if zfs send -R "${MAIN_POOL}@${SNAP_NAME}" \
+                | zfs receive -F "${BACKUP_POOL}/${MAIN_POOL}" 2>&1; then
+                REPLICATION_OK=true
+            fi
         fi
     else
         # First backup — full send
         echo "  Full send (first backup)"
-        zfs send -R "${MAIN_POOL}@${SNAP_NAME}" \
-            | zfs receive -F "${BACKUP_POOL}/${MAIN_POOL}"
+        if zfs send -R "${MAIN_POOL}@${SNAP_NAME}" \
+            | zfs receive -F "${BACKUP_POOL}/${MAIN_POOL}" 2>&1; then
+            REPLICATION_OK=true
+        fi
     fi
 
-    echo "  Backup replicated to ${BACKUP_POOL}/${MAIN_POOL}@${SNAP_NAME}"
+    if $REPLICATION_OK; then
+        echo "  Backup replicated to ${BACKUP_POOL}/${MAIN_POOL}@${SNAP_NAME}"
+    else
+        echo "  WARNING: Replication failed — local snapshot kept, but backup pool is out of date"
+    fi
 else
     echo "  Backup pool not available — snapshot only (no replication)"
 fi
 
-# Auto-prune old snapshots
-echo "==> Pruning old snapshots (keeping last $KEEP_COUNT)..."
-for dataset in "$MAIN_POOL" "$BACKUP_POOL"; do
-    SNAPS=$(zfs list -t snapshot -r "$dataset" -o name -H -S creation 2>/dev/null | grep "@${SNAP_PREFIX}-" || true)
-    COUNT=0
-    while IFS= read -r snap; do
-        [ -z "$snap" ] && continue
-        COUNT=$((COUNT + 1))
-        if [ "$COUNT" -gt "$KEEP_COUNT" ]; then
-            zfs destroy "$snap" 2>/dev/null || true
-        fi
-    done <<< "$SNAPS"
-done
-
-echo "==> Backup complete."
+# Note: prune runs via the EXIT trap above, so it executes even if we exit early
 BACKUPEOF
 chmod +x "$BACKUP_SCRIPT"
 echo "  Installed $BACKUP_SCRIPT"
