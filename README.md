@@ -1,11 +1,14 @@
 # Containarium
 
-Run hundreds of isolated Linux development environments on a single VM.
-Built with LXC, SSH jump hosts, and cloud-native automation.
+Run hundreds of isolated development environments on a single VM.
+Built with Incus (LXC/QEMU), SSH jump hosts, and cloud-native automation.
 
 🚫 No Kubernetes
 🚫 No VM-per-user
-✅ Just fast, cheap, isolated Linux environments
+✅ Fast, cheap, isolated Linux environments (Ubuntu, Rocky/RHEL 9)
+✅ Windows Server VMs with RDP access
+✅ GPU passthrough for ML/AI workloads
+✅ Multi-backend: GCP spot VMs + bare-metal GPU nodes
 
 ### Container Management
 ![Container Dashboard](docs/screenshots/dashboard-container.png)
@@ -110,43 +113,44 @@ In real deployments, this reduces infrastructure costs by up to 90%.
 
 ## What It Does
 
-Containarium is a container-based development environment platform that:
+Containarium is a multi-backend development environment platform that:
 
-- Hosts many isolated Linux environments on a single cloud VM
+- Hosts many isolated environments on cloud VMs and bare-metal GPU nodes
 - Gives each user SSH access to their own container
-- Uses LXC system containers (not Docker app containers)
-- Keeps containers persistent, even across VM restarts
-- Is managed via a single Go CLI + gRPC
+- Supports multiple OS types: **Ubuntu 24.04**, **Rocky Linux 9** (dev), **RHEL 9** (production)
+- Runs **Windows Server VMs** with RDP access via QEMU/KVM
+- Provides **GPU passthrough** (NVIDIA) for ML/AI workloads
+- Keeps containers persistent, even across VM restarts and spot preemptions
+- Managed via CLI, REST API, gRPC, Web UI, and MCP (Claude Desktop)
 
 Each container behaves like a lightweight VM:
 
-- Full Linux OS
-- User accounts
-- SSH access
-- Can run Docker, build tools, ML workloads, etc.
+- Full Linux OS (or Windows Server VM)
+- User accounts with SSH access
+- Docker/Podman support with nested containers
+- GPU passthrough for CUDA workloads
+- Pre-configured software stacks (Node.js, Python, Go, Rust, GPU/CUDA, Android, Docker, etc.)
 
 ## Architecture (High Level)
 
 ```
 Developer Laptop
       |
-      |  ssh (ProxyJump)
+      |  ssh / https
       v
-+-------------------+
-|   SSH Jump Host   |  (no shell access)
-+-------------------+
-          |
-          v
-+----------------------------------+
-|        Cloud VM (Host)            |
-|                                  |
-|  +---------+  +---------+        |
-|  | LXC #1  |  | LXC #2  |  ...   |
-|  | user A  |  | user B  |        |
-|  +---------+  +---------+        |
-|                                  |
-|  ZFS-backed persistent storage   |
-+----------------------------------+
++---------------------------+
+|   Sentinel (e2-micro)     |  sshpiper + reverse proxy
++---------------------------+
+       |          |          |
+       v          v          v
+  +---------+ +---------+ +---------+
+  | GCP Spot| | GPU Node| | GPU Node|
+  | VM      | | (tunnel)| | (tunnel)|
+  +---------+ +---------+ +---------+
+  | LXC x19 | | LXC x5  | | LXC x4  |
+  | Caddy   | | RTX 4090| | RTX 3090|
+  | ZFS     | | ZFS     | | ZFS     |
+  +---------+ +---------+ +---------+
 ```
 
 ## Key Features
@@ -154,34 +158,51 @@ Developer Laptop
 🚀 Fast Provisioning
 
 - Create a full Linux environment in seconds
-- No VM boot, no OS installation per user
+- Pre-configured stacks: Node.js, Python, Go, Rust, Data Science, DevOps, Docker, GPU/CUDA, Android, Full Stack
+- Multi-OS: Ubuntu 24.04, Rocky Linux 9, RHEL 9
 
 🔐 Strong Isolation
 
 - Unprivileged LXC containers
 - Separate users, filesystems, and processes
-- SSH jump host prevents direct host access
+- SSH jump host with sshpiper (username-based routing)
+- ClamAV + Trivy security scanning across all backends
 
 💾 Persistent Storage
 
 - Containers survive:
   - VM restarts
   - Spot/preemptible instance termination
-- Backed by ZFS persistent disks
+- Backed by ZFS persistent disks with compression
+
+🖥️ Multi-Backend Architecture
+
+- **GCP Spot VMs**: Cost-effective cloud backends
+- **Bare-metal GPU nodes**: RTX 3090, RTX 4090, etc. connected via tunnel
+- **Windows Server VMs**: QEMU/KVM with RDP access
+- Containers from all backends appear in a single unified dashboard
+- See [docs/WINDOWS-VM-SETUP.md](docs/WINDOWS-VM-SETUP.md) for Windows VMs
 
 🛡️ Sentinel HA (Spot Instance Recovery)
 
-- One tiny always-on VM (e2-micro, free tier) monitors multiple spot VMs
+- One tiny always-on VM (e2-micro, free tier) monitors all backends
 - Detects preemption in ~10s, serves maintenance page instantly
-- Restarts spot VMs automatically — ~85s total recovery (vs ~9min with MIG)
-- Syncs TLS certificates for valid HTTPS during maintenance
-- Scales horizontally: add more spot VMs behind the same sentinel
+- Restarts spot VMs automatically — ~85s total recovery
+- Routes SSH via sshpiper, HTTP via reverse proxy
 - See [docs/SENTINEL-DESIGN.md](docs/SENTINEL-DESIGN.md) for the full design
+
+📊 Monitoring & Observability
+
+- Backend heartbeat dashboard (Grafana status-history panel)
+- Per-container metrics: CPU, memory, disk, network
+- VictoriaMetrics + Grafana auto-provisioned
+- Custom alert rules with webhook notifications
 
 ⚙️ Simple Management
 
-- Single Go binary
-- gRPC-based control plane
+- Single Go binary for all components
+- Web UI with real-time updates (SSE)
+- REST API + gRPC + MCP (Claude Desktop integration)
 - Terraform for infrastructure provisioning
 
 💰 Cost Efficient
@@ -207,21 +228,24 @@ This is not:
 
 - A Kubernetes cluster
 - An application container platform
-- A web IDE
 
 It is intentionally simple.
 
 ## Use Cases
 
-👩‍💻 Shared developer environments
+👩‍💻 Shared developer environments (Linux + Windows)
 
 🧑‍🎓 Education, bootcamps, workshops
 
-🧪 AI / ML experimentation sandboxes
+🧪 AI / ML experimentation with GPU passthrough
+
+📱 Android app development (headless CI or Android Studio via VNC)
 
 🧑‍💼 Intern or contractor onboarding
 
 🏢 Cost-sensitive enterprises with SSH workflows
+
+🔒 Security-scanned environments (ClamAV + Trivy)
 
 ## How It's Different
 
@@ -235,9 +259,9 @@ It is intentionally simple.
 
 ## Status
 
-- Actively used internally
-- Early-stage open source
-- APIs and CLI may evolve
+- Actively used in production (GCP + bare-metal GPU nodes)
+- v0.15.0 — multi-OS, multi-backend, security scanning
+- APIs stable (protobuf-defined with gRPC-gateway)
 - Contributions and feedback welcome
 
 ## Getting Started
@@ -246,7 +270,7 @@ It is intentionally simple.
 
 ### System Requirements
 
-**Host System:**
+**Host System (runs on Ubuntu, containers can be any supported OS):**
 - Ubuntu 24.04 LTS (Noble) or later
 - **Incus 6.19 or later** (required for Docker build support)
   - Ubuntu 24.04 default repos ship Incus 6.0.0 which has AppArmor bug ([CVE-2025-52881](https://ubuntu.com/security/CVE-2025-52881))
@@ -294,9 +318,20 @@ See [`terraform/gce/README.md`](terraform/gce/README.md) for configuration optio
 **After Installation:**
 
 1. Start the daemon: `sudo systemctl start containarium`
-2. Create containers: `sudo containarium create alice --ssh-key ~/.ssh/id_rsa.pub`
+2. Create containers:
+   ```bash
+   # Ubuntu (default)
+   sudo containarium create alice --ssh-key ~/.ssh/id_ed25519.pub
+
+   # Rocky Linux 9 (dev/test)
+   sudo containarium create bob --ssh-key ~/.ssh/id_ed25519.pub --os-type rocky9
+
+   # With GPU and software stack
+   sudo containarium create ml-dev --ssh-key ~/.ssh/id_ed25519.pub --gpu 0 --stack gpu
+   ```
 3. Connect via SSH: `ssh alice@container-ip`
-4. Use REST API: `http://localhost:8080/swagger-ui/`
+4. Web UI: `http://your-server:8080/webui/`
+5. REST API: `http://your-server:8080/swagger-ui/`
 
 👉 See `docs/` for detailed setup instructions.
 
@@ -396,8 +431,10 @@ curl -X POST \
       "memory": "8GB",
       "disk": "100GB"
     },
-    "image": "ubuntu:24.04",
-    "enable_docker": true
+    "osType": "OS_TYPE_UBUNTU_2404",
+    "enablePodman": true,
+    "stack": "nodejs",
+    "async": true
   }' \
   http://localhost:8080/v1/containers
 
@@ -463,18 +500,58 @@ Features:
 
 ### Available REST Endpoints
 
+**Containers:**
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/v1/containers` | Create a new container |
-| `GET` | `/v1/containers` | List all containers |
+| `GET` | `/v1/containers` | List all containers (all backends) |
 | `GET` | `/v1/containers/{username}` | Get container details |
 | `DELETE` | `/v1/containers/{username}` | Delete a container |
 | `POST` | `/v1/containers/{username}/start` | Start a container |
 | `POST` | `/v1/containers/{username}/stop` | Stop a container |
-| `POST` | `/v1/containers/{username}/ssh-keys` | Add SSH key |
-| `DELETE` | `/v1/containers/{username}/ssh-keys/{key}` | Remove SSH key |
-| `GET` | `/v1/metrics` | Get container metrics |
-| `GET` | `/v1/system/info` | Get system information |
+| `PUT` | `/v1/containers/{username}/resize` | Resize CPU/memory/disk |
+| `POST` | `/v1/containers/{username}/install-stack` | Install software stack |
+| `POST` | `/v1/containers/{username}/cleanup-disk` | Free disk space |
+
+**Collaborators:**
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/v1/containers/{username}/collaborators` | Add collaborator |
+| `DELETE` | `/v1/containers/{username}/collaborators/{collaborator}` | Remove collaborator |
+| `GET` | `/v1/containers/{username}/collaborators` | List collaborators |
+
+**System & Monitoring:**
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/v1/system/info` | System info (all backends) |
+| `GET` | `/v1/system/monitoring` | Grafana/VictoriaMetrics URLs |
+| `GET` | `/v1/metrics` | Container metrics |
+| `GET` | `/v1/backends` | List backends with health status |
+
+**Security:**
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/v1/security/clamav-summary` | ClamAV scan summary |
+| `GET` | `/v1/security/clamav-reports` | Scan reports |
+| `POST` | `/v1/security/clamav-scan` | Trigger security scan |
+
+**Alerts:**
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/v1/alerts` | Create alert rule |
+| `GET` | `/v1/alerts` | List alert rules |
+| `PUT` | `/v1/system/alerting` | Update webhook config |
+
+## Documentation
+
+| Guide | Description |
+|-------|-------------|
+| [SENTINEL-DESIGN.md](docs/SENTINEL-DESIGN.md) | Sentinel HA architecture |
+| [WINDOWS-VM-SETUP.md](docs/WINDOWS-VM-SETUP.md) | Windows Server VM with RDP access |
+| [ANDROID-DEV-SETUP.md](docs/ANDROID-DEV-SETUP.md) | Android development environment (headless + GUI) |
+| [CROSS-PEER-FILE-TRANSFER.md](docs/CROSS-PEER-FILE-TRANSFER.md) | Transfer large files between peer containers |
+| [ALERTING-SETUP.md](docs/ALERTING-SETUP.md) | Alert rules, webhooks (Zulip/Slack), troubleshooting |
+| [MCP-INTEGRATION.md](docs/MCP-INTEGRATION.md) | Claude Desktop MCP integration |
 
 ## Philosophy
 
@@ -721,7 +798,7 @@ Flow:
 4. Host sshd: Authenticate sentinel upstream key
 5. containarium-shell: sudo incus exec alice-container -- su -l alice
 6. User: Interactive shell in container
-   (If auth fails 3x → sshpiper bans client IP for 1h)
+   (If auth fails 20x → sshpiper bans client IP for 1h)
 ```
 
 **Method 2: ProxyJump with container IP**
