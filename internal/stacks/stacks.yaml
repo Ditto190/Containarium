@@ -233,3 +233,49 @@ stacks:
     post_install:
       - echo 'export PATH=/usr/local/cuda/bin:$PATH' >> ~/.bashrc
       - echo 'export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
+
+  - id: android
+    name: Android Development (Headless)
+    description: Android SDK, emulator with KVM acceleration, ADB, Gradle for headless builds and testing
+    icon: android
+    pre_install:
+      - "apt-get install -y openjdk-17-jdk-headless unzip wget cpu-checker qemu-kvm"
+      - "mkdir -p /opt/android-sdk/cmdline-tools"
+      - "wget -q -O /tmp/cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
+      - "unzip -q /tmp/cmdline-tools.zip -d /opt/android-sdk/cmdline-tools"
+      - "mv /opt/android-sdk/cmdline-tools/cmdline-tools /opt/android-sdk/cmdline-tools/latest"
+      - "rm /tmp/cmdline-tools.zip"
+      - "yes | /opt/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null 2>&1 || true"
+      - "/opt/android-sdk/cmdline-tools/latest/bin/sdkmanager 'platform-tools' 'build-tools;35.0.0' 'platforms;android-35' 'emulator' 'system-images;android-35;google_apis;x86_64'"
+    packages: []
+    post_install:
+      - echo 'export ANDROID_HOME=/opt/android-sdk' >> ~/.bashrc
+      - echo 'export ANDROID_SDK_ROOT=/opt/android-sdk' >> ~/.bashrc
+      - echo 'export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH' >> ~/.bashrc
+      - /opt/android-sdk/cmdline-tools/latest/bin/avdmanager create avd -n default -k "system-images;android-35;google_apis;x86_64" -d pixel_6 --force
+
+  - id: android-studio
+    name: Android Development (GUI)
+    description: Android Studio with VNC access, emulator, full IDE for app development
+    icon: android
+    pre_install:
+      - "apt-get install -y openjdk-17-jdk unzip wget cpu-checker qemu-kvm"
+      - "apt-get install -y tigervnc-standalone-server dbus-x11 xfce4 xfce4-terminal fonts-noto"
+      - "mkdir -p /opt/android-sdk/cmdline-tools"
+      - "wget -q -O /tmp/cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
+      - "unzip -q /tmp/cmdline-tools.zip -d /opt/android-sdk/cmdline-tools"
+      - "mv /opt/android-sdk/cmdline-tools/cmdline-tools /opt/android-sdk/cmdline-tools/latest"
+      - "rm /tmp/cmdline-tools.zip"
+      - "wget -q -O /tmp/android-studio.tar.gz https://redirector.gvt1.com/edgedl/android/studio/ide-zips/2024.3.2.16/android-studio-2024.3.2.16-linux.tar.gz"
+      - "tar xzf /tmp/android-studio.tar.gz -C /opt/"
+      - "rm /tmp/android-studio.tar.gz"
+      - "yes | /opt/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null 2>&1 || true"
+      - "/opt/android-sdk/cmdline-tools/latest/bin/sdkmanager 'platform-tools' 'build-tools;35.0.0' 'platforms;android-35' 'emulator' 'system-images;android-35;google_apis;x86_64'"
+    packages: []
+    post_install:
+      - echo 'export ANDROID_HOME=/opt/android-sdk' >> ~/.bashrc
+      - echo 'export ANDROID_SDK_ROOT=/opt/android-sdk' >> ~/.bashrc
+      - echo 'export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:/opt/android-studio/bin:$PATH' >> ~/.bashrc
+      - /opt/android-sdk/cmdline-tools/latest/bin/avdmanager create avd -n default -k "system-images;android-35;google_apis;x86_64" -d pixel_6 --force
+      - mkdir -p ~/.vnc && echo "containarium" | vncpasswd -f > ~/.vnc/passwd && chmod 600 ~/.vnc/passwd
+      - printf '#!/bin/bash\nstartxfce4 &\n' > ~/.vnc/xstartup && chmod +x ~/.vnc/xstartup
