@@ -549,6 +549,7 @@ Features:
 | [SENTINEL-DESIGN.md](docs/SENTINEL-DESIGN.md) | Sentinel HA architecture |
 | [WINDOWS-VM-SETUP.md](docs/WINDOWS-VM-SETUP.md) | Windows Server VM with RDP access |
 | [ANDROID-DEV-SETUP.md](docs/ANDROID-DEV-SETUP.md) | Android development environment (headless + GUI) |
+| [KUBEFLOW-SETUP.md](docs/KUBEFLOW-SETUP.md) | Kind + Kubeflow Pipelines for ML workflows |
 | [CROSS-PEER-FILE-TRANSFER.md](docs/CROSS-PEER-FILE-TRANSFER.md) | Transfer large files between peer containers |
 | [ALERTING-SETUP.md](docs/ALERTING-SETUP.md) | Alert rules, webhooks (Zulip/Slack), troubleshooting |
 | [MCP-INTEGRATION.md](docs/MCP-INTEGRATION.md) | Claude Desktop MCP integration |

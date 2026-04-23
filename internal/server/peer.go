@@ -336,14 +336,15 @@ func (pc *PeerClient) ForwardCreateContainer(authToken string, pbReq *pb.CreateC
 			"memory": pbReq.Resources.GetMemory(),
 			"disk":   pbReq.Resources.GetDisk(),
 		},
-		"sshKeys":      pbReq.SshKeys,
-		"enablePodman": pbReq.EnablePodman,
-		"stack":        pbReq.Stack,
-		"gpu":          pbReq.Gpu,
-		"staticIp":     pbReq.StaticIp,
-		"labels":       pbReq.Labels,
-		"async":        pbReq.Async,
-		"osType":       int32(pbReq.OsType),
+		"sshKeys":         pbReq.SshKeys,
+		"enablePodman":    pbReq.EnablePodman,
+		"stack":           pbReq.Stack,
+		"stackParameters": pbReq.StackParameters,
+		"gpu":             pbReq.Gpu,
+		"staticIp":        pbReq.StaticIp,
+		"labels":          pbReq.Labels,
+		"async":           pbReq.Async,
+		"osType":          int32(pbReq.OsType),
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)
