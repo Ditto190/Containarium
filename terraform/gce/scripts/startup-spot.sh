@@ -386,6 +386,13 @@ else
     echo "✓ Incus already initialized"
 fi
 
+# Use ZFS refquota instead of quota for container disk limits.
+# refquota counts ONLY live data; quota counts data + snapshots.
+# Without this, daily backup snapshots eat into the container's visible
+# disk size (user asks for 500GB, sees 150GB after a heavy delete).
+# Idempotent; no-op for non-ZFS pools.
+incus storage set default volume.zfs.use_refquota true 2>/dev/null || true
+
 # Configure Incus networking
 echo "==> Configuring Incus network..."
 # Ensure bridge is created with proper subnet

@@ -372,6 +372,14 @@ else
     echo "  Incus already initialized"
 fi
 
+# Use ZFS refquota instead of quota for container disk limits.
+# refquota counts ONLY live data; quota counts data + snapshots.
+# With quota, daily backup snapshots eat into the user's visible disk
+# (e.g. user asks for 500GB, sees 150GB after a heavy delete because the
+# 350GB they freed is still pinned by yesterday's snapshot). refquota
+# decouples user-facing capacity from snapshot retention. Idempotent.
+incus storage set default volume.zfs.use_refquota true 2>/dev/null || true
+
 # --- Backup pool (incus-backup) — ZFS mirror on HDDs ---
 if [ -n "$BACKUP_DISKS" ]; then
     if ! zpool list incus-backup &>/dev/null; then
