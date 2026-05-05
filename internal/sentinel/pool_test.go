@@ -73,11 +73,85 @@ func TestPeersHandlerPoolFilter(t *testing.T) {
 	})
 }
 
+// TestOnTunnelConnect_PromotesPrimary verifies that a tunnel handshake
+// carrying PublicHostname auto-creates a primary registry entry pointing
+// at the tunnel's loopback alias, and that disconnecting cleans it up.
+func TestOnTunnelConnect_PromotesPrimary(t *testing.T) {
+	m := &Manager{
+		backends:  NewBackendPool(),
+		primaries: NewPrimaryRegistry(),
+		certStore: NewCertStore(),
+		keyStore:  NewKeyStore(),
+	}
+
+	spot := &TunnelSpot{
+		ID:             "lab-primary-1",
+		LocalIP:        "127.0.0.7",
+		ExternalPort:   18007,
+		Pool:           "lab",
+		PublicHostname: "containarium-lab.kafeido.app",
+		PublicAliases:  []string{"lab-api.kafeido.app"},
+		PublicPort:     443,
+	}
+
+	m.OnTunnelConnect(spot)
+
+	// Backend pool sees the tunnel as before.
+	b := m.backends.Get("tunnel-lab-primary-1")
+	if assert.NotNil(t, b) {
+		assert.Equal(t, "lab", b.Pool)
+		assert.Equal(t, "127.0.0.7", b.IP)
+	}
+
+	// Primary registry has the tunnel-promoted entry.
+	p := m.primaries.LookupByPool("lab")
+	if assert.NotNil(t, p) {
+		assert.Equal(t, "containarium-lab.kafeido.app", p.Hostname)
+		assert.Equal(t, []string{"lab-api.kafeido.app"}, p.Aliases)
+		assert.Equal(t, "127.0.0.7", p.IP)
+		assert.Equal(t, 443, p.Port)
+		assert.Equal(t, "tunnel-lab-primary-1", p.BackendID)
+	}
+
+	// SNI lookup by alias finds the same primary.
+	if p2 := m.primaries.LookupByHostname("lab-api.kafeido.app"); assert.NotNil(t, p2) {
+		assert.Equal(t, "lab", p2.Pool)
+	}
+
+	// Disconnect removes both backend and primary entries.
+	m.OnTunnelDisconnect(spot)
+	assert.Nil(t, m.primaries.LookupByPool("lab"), "primary entry should be removed on disconnect")
+}
+
+// TestOnTunnelConnect_PeerOnlyDoesNotPromote confirms that a tunnel without
+// PublicHostname (a regular peer) does not create a primary entry.
+func TestOnTunnelConnect_PeerOnlyDoesNotPromote(t *testing.T) {
+	m := &Manager{
+		backends:  NewBackendPool(),
+		primaries: NewPrimaryRegistry(),
+		certStore: NewCertStore(),
+		keyStore:  NewKeyStore(),
+	}
+
+	spot := &TunnelSpot{
+		ID:           "peer-1",
+		LocalIP:      "127.0.0.8",
+		ExternalPort: 18008,
+		Pool:         "lab",
+		// No PublicHostname / PublicPort
+	}
+
+	m.OnTunnelConnect(spot)
+
+	assert.NotNil(t, m.backends.Get("tunnel-peer-1"))
+	assert.Nil(t, m.primaries.LookupByPool("lab"), "peer-only tunnel should not create a primary entry")
+}
+
 // TestRegisterPropagatesPool confirms the pool tag flows from Register()
 // into the TunnelSpot.
 func TestRegisterPropagatesPool(t *testing.T) {
 	r := NewTunnelRegistry()
-	_, err := r.Register("spot-1", nil, []int{8080}, "prod")
+	_, err := r.Register(&TunnelHandshake{SpotID: "spot-1", Ports: []int{8080}, Pool: "prod"}, nil)
 	assert.NoError(t, err)
 
 	spot := r.Get("spot-1")
@@ -85,7 +159,7 @@ func TestRegisterPropagatesPool(t *testing.T) {
 	assert.Equal(t, "prod", spot.Pool)
 
 	// Empty pool stays empty (back-compat).
-	_, err = r.Register("spot-2", nil, []int{8080}, "")
+	_, err = r.Register(&TunnelHandshake{SpotID: "spot-2", Ports: []int{8080}}, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, "", r.Get("spot-2").Pool)
 }

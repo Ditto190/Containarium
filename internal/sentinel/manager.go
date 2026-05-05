@@ -717,6 +717,23 @@ func (m *Manager) OnTunnelConnect(spot *TunnelSpot) {
 
 	log.Printf("[sentinel] tunnel connected: %s at %s (total backends: %d)", b.ID, b.IP, m.backends.Count())
 
+	// If the tunnel handshake declared this spot is a primary (slice 6),
+	// auto-register it in the primary registry pointing at its loopback
+	// alias. The SNI router will then forward inbound traffic for the
+	// primary's hostname/aliases through the tunnel.
+	if spot.PublicHostname != "" && spot.PublicPort != 0 && m.primaries != nil {
+		m.primaries.Register(Primary{
+			Pool:      spot.Pool,
+			Hostname:  spot.PublicHostname,
+			Aliases:   spot.PublicAliases,
+			IP:        spot.LocalIP,
+			Port:      spot.PublicPort,
+			BackendID: b.ID,
+		})
+		log.Printf("[sentinel] tunnel-promoted primary: pool=%q hostname=%q aliases=%v -> %s:%d",
+			spot.Pool, spot.PublicHostname, spot.PublicAliases, spot.LocalIP, spot.PublicPort)
+	}
+
 	// Start sync loops for this tunnel backend
 	ctx := context.Background()
 	m.startSyncLoops(ctx, b)
@@ -727,6 +744,11 @@ func (m *Manager) OnTunnelConnect(spot *TunnelSpot) {
 // OnTunnelDisconnect is called when a remote spot disconnects.
 func (m *Manager) OnTunnelDisconnect(spot *TunnelSpot) {
 	backendID := "tunnel-" + spot.ID
+	if m.primaries != nil {
+		if n := m.primaries.UnregisterByBackendID(backendID); n > 0 {
+			log.Printf("[sentinel] removed %d primary registration(s) for disconnected tunnel %s", n, backendID)
+		}
+	}
 	removed := m.backends.Remove(backendID)
 	if removed == nil {
 		return

@@ -43,6 +43,24 @@ func TestTunnelHandshakeValidation(t *testing.T) {
 			token:   "secret",
 			wantErr: true,
 		},
+		{
+			name:    "primary handshake valid",
+			hs:      &TunnelHandshake{Token: "secret", SpotID: "spot-1", Ports: []int{443}, Pool: "lab", PublicHostname: "lab.example", PublicPort: 443},
+			token:   "secret",
+			wantErr: false,
+		},
+		{
+			name:    "primary handshake without public_port",
+			hs:      &TunnelHandshake{Token: "secret", SpotID: "spot-1", Ports: []int{443}, Pool: "lab", PublicHostname: "lab.example"},
+			token:   "secret",
+			wantErr: true,
+		},
+		{
+			name:    "primary handshake without pool",
+			hs:      &TunnelHandshake{Token: "secret", SpotID: "spot-1", Ports: []int{443}, PublicHostname: "lab.example", PublicPort: 443},
+			token:   "secret",
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {

@@ -86,6 +86,22 @@ func (r *PrimaryRegistry) Unregister(pool string) bool {
 	return ok
 }
 
+// UnregisterByBackendID removes any primary entry whose BackendID matches.
+// Used when a tunnel-registered primary disconnects. Returns the number of
+// entries removed.
+func (r *PrimaryRegistry) UnregisterByBackendID(backendID string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	removed := 0
+	for pool, p := range r.primaries {
+		if p.BackendID == backendID {
+			delete(r.primaries, pool)
+			removed++
+		}
+	}
+	return removed
+}
+
 // LookupByPool returns the primary serving the given pool, or nil. Stale
 // entries (last heartbeat older than PrimaryTTL) are treated as absent.
 func (r *PrimaryRegistry) LookupByPool(pool string) *Primary {

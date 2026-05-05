@@ -24,6 +24,13 @@ type TunnelSpot struct {
 	Ports        []int  // ports this spot serves
 	Pool         string // optional pool tag for grouping peers; empty = unpooled
 	Connected    time.Time
+
+	// Primary self-registration via handshake (slice 6). Non-empty
+	// PublicHostname promotes this tunnel into a primary registry entry on
+	// connect; cleared on disconnect.
+	PublicHostname string
+	PublicAliases  []string
+	PublicPort     int
 }
 
 // TunnelRegistry tracks connected tunnel clients and assigns loopback aliases.
@@ -45,10 +52,14 @@ func NewTunnelRegistry() *TunnelRegistry {
 
 // Register adds a new spot to the registry, assigns a loopback alias,
 // and configures it on the system. Returns the assigned loopback IP.
-// pool is an optional tag for grouping peers; pass "" for unpooled.
-func (r *TunnelRegistry) Register(spotID string, session *yamux.Session, ports []int, pool string) (string, error) {
+// Pool, PublicHostname, PublicAliases, PublicPort are read off the
+// handshake; PublicHostname being set means the sentinel will promote
+// this tunnel into a primary registry entry on connect.
+func (r *TunnelRegistry) Register(hs *TunnelHandshake, session *yamux.Session) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	spotID := hs.SpotID
 
 	// If this spotID is already registered, reuse its loopback IP
 	// This prevents sshpiper config from going stale during reconnects
@@ -81,17 +92,20 @@ func (r *TunnelRegistry) Register(spotID string, session *yamux.Session, ports [
 	externalPort := ExternalPortBase + int(octet)
 
 	spot := &TunnelSpot{
-		ID:           spotID,
-		Session:      session,
-		LocalIP:      localIP,
-		ExternalPort: externalPort,
-		Ports:        ports,
-		Pool:         pool,
-		Connected:    time.Now(),
+		ID:             spotID,
+		Session:        session,
+		LocalIP:        localIP,
+		ExternalPort:   externalPort,
+		Ports:          hs.Ports,
+		Pool:           hs.Pool,
+		PublicHostname: hs.PublicHostname,
+		PublicAliases:  hs.PublicAliases,
+		PublicPort:     hs.PublicPort,
+		Connected:      time.Now(),
 	}
 	r.spots[spotID] = spot
 
-	log.Printf("[tunnel-registry] registered spot %q at %s (ports: %v, pool: %q)", spotID, localIP, ports, pool)
+	log.Printf("[tunnel-registry] registered spot %q at %s (ports: %v, pool: %q, primary_host: %q)", spotID, localIP, hs.Ports, hs.Pool, hs.PublicHostname)
 	return localIP, nil
 }
 

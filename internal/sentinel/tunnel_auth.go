@@ -13,6 +13,15 @@ type TunnelHandshake struct {
 	SpotID string `json:"spot_id"`
 	Ports  []int  `json:"ports"`
 	Pool   string `json:"pool,omitempty"`
+
+	// Optional primary registration (slice 6). When PublicHostname is set,
+	// the sentinel auto-registers this tunnel as the primary for its pool,
+	// pointing at the tunnel's loopback alias on the sentinel side. This
+	// avoids the daemon needing direct HTTP access to /sentinel/primaries
+	// from networks that can only reach the sentinel via the tunnel.
+	PublicHostname string   `json:"public_hostname,omitempty"`
+	PublicAliases  []string `json:"public_aliases,omitempty"`
+	PublicPort     int      `json:"public_port,omitempty"`
 }
 
 // TunnelHandshakeResponse is sent by the sentinel back to the spot after
@@ -63,6 +72,14 @@ func validateHandshake(hs *TunnelHandshake, expectedToken string) error {
 	}
 	if len(hs.Ports) == 0 {
 		return fmt.Errorf("at least one port is required")
+	}
+	if hs.PublicHostname != "" {
+		if hs.PublicPort == 0 {
+			return fmt.Errorf("public_port is required when public_hostname is set")
+		}
+		if hs.Pool == "" {
+			return fmt.Errorf("pool is required when public_hostname is set")
+		}
 	}
 	return nil
 }

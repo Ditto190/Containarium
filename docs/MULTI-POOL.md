@@ -70,6 +70,7 @@ If a single team needs visibility across all containers, **don't use multi-pool*
 | 3 | Primary self-registration with sentinel: `POST /sentinel/primaries`, heartbeat, deregister; `--public-hostname` / `--public-port` flags | `internal/sentinel/primary_registry.go`, `internal/server/primary_register.go` |
 | 4 | SNI peeking + routing in the sentinel HTTPS dispatcher; falls back to the legacy single-backend behavior on miss | `internal/sentinel/sni.go`, `internal/sentinel/manager.go` |
 | 5 | Hostname aliases on `Primary` so app domains (e.g. `api.kafeido.app`) route to the right pool's primary; `--public-aliases` flag | `internal/sentinel/primary_registry.go`, `internal/server/primary_register.go` |
+| 6 | Primary registration via tunnel handshake — a primary behind NAT/Tailscale tunnels into the sentinel and gets auto-promoted into the primary registry pointing at its loopback alias | `internal/sentinel/tunnel_auth.go`, `tunnel_registry.go`, `manager.go`, `internal/cmd/tunnel.go`, `scripts/setup-peer.sh` |
 
 ## Flows
 
@@ -173,6 +174,44 @@ client (browser)                sentinel                          primary (prod)
 ```
 
 Without aliases, app-domain SNI would miss the registry and fall through to the legacy single-backend forwarder — losing pool isolation. **In a multi-pool deployment, every app hostname served by a pool's Caddy must appear in that primary's `--public-aliases`.**
+
+### Primary behind NAT/Tailscale (slice 6)
+
+A primary doesn't need to be in the same network as the sentinel. If it can only reach the sentinel via the existing yamux tunnel (Tailscale, behind NAT, etc.), the *tunnel handshake itself* carries the primary registration:
+
+```
+peer/primary host                           sentinel
+       │                                       │
+       │  containarium tunnel \                │
+       │    --pool lab \                       │
+       │    --spot-id lab-primary-1 \          │
+       │    --ports 22,8080,443 \              │
+       │    --public-hostname containarium-    │
+       │      lab.kafeido.app \                │
+       │    --public-aliases lab-api.kafeido.  │
+       │      app \                            │
+       │    --public-port 443                  │
+       │                                       │
+       │  ─── handshake (JSON) ─────────────▶  │  TunnelRegistry.Register
+       │                                       │  → assigns 127.0.0.X loopback
+       │                                       │  → OnTunnelConnect:
+       │                                       │     primaries.Register(
+       │                                       │       Pool=lab,
+       │                                       │       Hostname=containarium-lab…,
+       │                                       │       IP=127.0.0.X, Port=443,
+       │                                       │       BackendID=tunnel-lab-primary-1)
+       │  ◀── handshake_ok                     │
+       │                                       │
+       │  ═══════ yamux session ═════════════  │
+       │   sentinel binds 127.0.0.X:443        │
+       │   (loopback proxy → yamux)            │
+```
+
+When inbound TLS arrives with `SNI=containarium-lab.kafeido.app`, the SNI router's `LookupByHostname` returns the tunnel-promoted entry. Sentinel dials `127.0.0.X:443` (its own loopback alias), bytes stream through yamux back to the primary's local `:443` (where Caddy terminates TLS).
+
+On tunnel disconnect, the primary entry is removed automatically (`UnregisterByBackendID`).
+
+**Limitation**: a tunneled primary's daemon can't reach `/sentinel/peers` for peer discovery (the binary server isn't publicly exposed). Acceptable for a single-node lab pool; future work if you want peers under a tunneled primary.
 
 ## Operator workflow: adding a new pool
 
