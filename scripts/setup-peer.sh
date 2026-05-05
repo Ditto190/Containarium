@@ -23,6 +23,7 @@ NETWORK_SUBNET="10.0.3.1/24"
 TUNNEL_TOKEN="82ae3301b4650ab2d0026cf0f6a5b5b78dfcc9e022922ac23858d1609913aa7f"
 SENTINEL_ADDR="containarium.kafeido.app:443"
 SENTINEL_URL=""  # Internal URL for auto-update (auto-detected from primary)
+POOL=""
 BINARY_SRC="/tmp/containarium"
 BINARY_DST="/usr/local/bin/containarium"
 
@@ -33,8 +34,9 @@ while [[ $# -gt 0 ]]; do
         --tunnel-token) TUNNEL_TOKEN="$2"; shift 2 ;;
         --sentinel-addr) SENTINEL_ADDR="$2"; shift 2 ;;
         --sentinel-url) SENTINEL_URL="$2"; shift 2 ;;
+        --pool) POOL="$2"; shift 2 ;;
         --help|-h)
-            echo "Usage: sudo $0 --spot-id <ID> [--network-subnet CIDR] [--tunnel-token TOKEN]"
+            echo "Usage: sudo $0 --spot-id <ID> [--network-subnet CIDR] [--tunnel-token TOKEN] [--pool NAME]"
             exit 0
             ;;
         *) echo "Unknown option: $1"; exit 1 ;;
@@ -93,6 +95,10 @@ echo "  Override written: /etc/systemd/system/containarium.service.d/override.co
 
 # 4. Install tunnel service
 echo "==> Installing tunnel service..."
+POOL_FLAG=""
+if [[ -n "$POOL" ]]; then
+    POOL_FLAG="--pool ${POOL}"
+fi
 cat > /etc/systemd/system/containarium-tunnel.service <<TUNNEL
 [Unit]
 Description=Containarium Tunnel Client (GPU Spot)
@@ -106,7 +112,7 @@ ExecStart=/usr/local/bin/containarium tunnel \\
   --sentinel-addr ${SENTINEL_ADDR} \\
   --token ${TUNNEL_TOKEN} \\
   --spot-id ${SPOT_ID} \\
-  --ports 22,8080
+  --ports 22,8080 ${POOL_FLAG}
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=10s

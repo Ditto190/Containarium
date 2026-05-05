@@ -17,6 +17,7 @@ var (
 	tunnelToken        string
 	tunnelSpotID       string
 	tunnelPorts        string
+	tunnelPool         string
 )
 
 var tunnelCmd = &cobra.Command{
@@ -45,6 +46,7 @@ func init() {
 	tunnelCmd.Flags().StringVar(&tunnelToken, "token", "", "Pre-shared authentication token (or CONTAINARIUM_TUNNEL_TOKEN env)")
 	tunnelCmd.Flags().StringVar(&tunnelSpotID, "spot-id", "", "Unique identifier for this spot instance (required)")
 	tunnelCmd.Flags().StringVar(&tunnelPorts, "ports", "22,80,443,3389,8080", "Comma-separated local ports to expose through the tunnel")
+	tunnelCmd.Flags().StringVar(&tunnelPool, "pool", "", "Pool name to register this peer in (optional; empty = unpooled)")
 }
 
 func runTunnel(cmd *cobra.Command, args []string) error {
@@ -85,8 +87,9 @@ func runTunnel(cmd *cobra.Command, args []string) error {
 		Token:        token,
 		SpotID:       tunnelSpotID,
 		Ports:        ports,
+		Pool:         tunnelPool,
 	}
 
-	log.Printf("[tunnel] connecting to sentinel at %s as %q (ports: %v)", tunnelSentinelAddr, tunnelSpotID, ports)
+	log.Printf("[tunnel] connecting to sentinel at %s as %q (ports: %v, pool: %q)", tunnelSentinelAddr, tunnelSpotID, ports, tunnelPool)
 	return client.Run(ctx)
 }

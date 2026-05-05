@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -53,6 +54,10 @@ type Manager struct {
 	backends *BackendPool
 	primary  *Backend // currently active backend for HTTP forwarding
 
+	// Primary daemon registry (one entry per pool, populated by daemon
+	// self-registration). Slice 4 will use this for SNI-based routing.
+	primaries *PrimaryRegistry
+
 	stopMaintenance func() // stops the HTTP/HTTPS maintenance servers
 	certStore       *CertStore
 	keyStore        *KeyStore
@@ -72,6 +77,7 @@ func NewManager(config Config, provider CloudProvider) *Manager {
 		config:    config,
 		provider:  provider,
 		backends:  NewBackendPool(),
+		primaries: NewPrimaryRegistry(),
 		certStore: NewCertStore(),
 		keyStore:  NewKeyStore(),
 	}
@@ -87,13 +93,22 @@ func (m *Manager) SetHTTPSListener(ln *chanListener) {
 
 // PeersHandler returns an HTTP handler that serves the list of tunnel backend peers.
 // This allows the primary daemon to discover tunnel backends and their reachable addresses.
+//
+// Optional query parameter:
+//
+//	?pool=<name>  Return only peers in the named pool. Pass ?pool= (empty value)
+//	              to return only peers without a pool tag. Omit the parameter
+//	              entirely to return all peers (back-compat default).
 func (m *Manager) PeersHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		type peerInfo struct {
 			ID        string `json:"id"`
 			ProxyPath string `json:"proxy_path"` // path prefix on binary server, e.g. "/peer/tunnel-fts-5900x-gpu"
 			Healthy   bool   `json:"healthy"`
+			Pool      string `json:"pool,omitempty"`
 		}
+
+		poolFilter, hasPoolFilter := r.URL.Query()["pool"]
 
 		backends := m.backends.All()
 		peers := make([]peerInfo, 0)
@@ -101,10 +116,14 @@ func (m *Manager) PeersHandler() http.HandlerFunc {
 			if b.Type != BackendTunnel {
 				continue
 			}
+			if hasPoolFilter && b.Pool != poolFilter[0] {
+				continue
+			}
 			peers = append(peers, peerInfo{
 				ID:        b.ID,
 				ProxyPath: "/peer/" + b.ID,
 				Healthy:   b.Healthy,
+				Pool:      b.Pool,
 			})
 		}
 
@@ -112,6 +131,79 @@ func (m *Manager) PeersHandler() http.HandlerFunc {
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"peers": peers,
 		})
+	}
+}
+
+// PrimariesHandler returns an HTTP handler that serves the primary registry.
+//
+// Methods:
+//
+//	GET    /sentinel/primaries           list all live primaries (optional ?pool=)
+//	POST   /sentinel/primaries           register a primary (body: Primary JSON)
+//	PUT    /sentinel/primaries/{pool}    heartbeat (refresh LastHeartbeat)
+//	DELETE /sentinel/primaries/{pool}    unregister
+//
+// Stale entries (no heartbeat within PrimaryTTL) are excluded from GET.
+func (m *Manager) PrimariesHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Path is either "/sentinel/primaries" or "/sentinel/primaries/{pool}"
+		rest := strings.TrimPrefix(r.URL.Path, "/sentinel/primaries")
+		rest = strings.TrimPrefix(rest, "/")
+		w.Header().Set("Content-Type", "application/json")
+
+		switch {
+		case r.Method == http.MethodGet && rest == "":
+			poolFilter, hasPoolFilter := r.URL.Query()["pool"]
+			out := make([]*Primary, 0)
+			for _, p := range m.primaries.All() {
+				if hasPoolFilter && p.Pool != poolFilter[0] {
+					continue
+				}
+				out = append(out, p)
+			}
+			json.NewEncoder(w).Encode(map[string]any{"primaries": out})
+
+		case r.Method == http.MethodPost && rest == "":
+			var p Primary
+			if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+				http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+				return
+			}
+			if p.IP == "" {
+				// Fall back to the request's source IP — saves the daemon
+				// from having to know its own routable IP.
+				if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+					p.IP = host
+				}
+			}
+			if p.Pool == "" || p.Hostname == "" || p.IP == "" || p.Port == 0 {
+				http.Error(w, `{"error":"pool, hostname, port required (ip optional, inferred from RemoteAddr)"}`, http.StatusBadRequest)
+				return
+			}
+			stored := m.primaries.Register(p)
+			log.Printf("[sentinel] primary registered: pool=%q host=%q ip=%s:%d", stored.Pool, stored.Hostname, stored.IP, stored.Port)
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(stored)
+
+		case r.Method == http.MethodPut && rest != "":
+			updated := m.primaries.Heartbeat(rest)
+			if updated == nil {
+				http.Error(w, `{"error":"pool not registered"}`, http.StatusNotFound)
+				return
+			}
+			json.NewEncoder(w).Encode(updated)
+
+		case r.Method == http.MethodDelete && rest != "":
+			if !m.primaries.Unregister(rest) {
+				http.Error(w, `{"error":"pool not registered"}`, http.StatusNotFound)
+				return
+			}
+			log.Printf("[sentinel] primary unregistered: pool=%q", rest)
+			w.WriteHeader(http.StatusNoContent)
+
+		default:
+			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		}
 	}
 }
 
@@ -404,21 +496,49 @@ func (m *Manager) switchToMaintenance() error {
 // startHTTPSProxy sets the dispatch handler to proxy HTTPS to the primary backend.
 // HTTPS is forwarded as raw TCP (TLS passthrough) so the backend (Caddy) handles
 // TLS termination with real Let's Encrypt certificates.
+//
+// Routing precedence per connection:
+//  1. If the TLS ClientHello carries an SNI hostname registered in
+//     m.primaries, forward to that primary's IP:Port.
+//  2. Otherwise (no SNI, unknown hostname, or non-TLS), forward to backendIP
+//     as before — preserves single-pool / unpooled behavior.
 func (m *Manager) startHTTPSProxy(backendIP string) {
-	target := net.JoinHostPort(backendIP, fmt.Sprintf("%d", m.config.HTTPSPort))
-	m.httpsDispatch.SetHandler(func(conn net.Conn) {
+	fallback := net.JoinHostPort(backendIP, fmt.Sprintf("%d", m.config.HTTPSPort))
+	m.httpsDispatch.SetHandler(m.buildSNIRoutingHandler(fallback))
+	log.Printf("[sentinel] HTTPS proxy started → fallback %s (SNI routing via primary registry)", fallback)
+}
+
+// buildSNIRoutingHandler returns a connection handler that peeks SNI from
+// each incoming TLS ClientHello and forwards the connection to the primary
+// registered for that hostname, falling back to fallbackTarget on miss.
+// Extracted from startHTTPSProxy so it can be exercised directly in tests
+// without spinning up a dispatchListener.
+func (m *Manager) buildSNIRoutingHandler(fallbackTarget string) func(net.Conn) {
+	return func(conn net.Conn) {
 		defer conn.Close()
+
+		// Bound the SNI peek so a stalled client can't hold the connection.
+		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		sni, peekedConn, peekErr := peekSNI(conn)
+		_ = conn.SetReadDeadline(time.Time{})
+
+		target := fallbackTarget
+		if peekErr == nil && sni != "" {
+			if p := m.primaries.LookupByHostname(sni); p != nil {
+				target = net.JoinHostPort(p.IP, fmt.Sprintf("%d", p.Port))
+			}
+		}
+
 		dst, err := net.DialTimeout("tcp", target, 5*time.Second)
 		if err != nil {
 			return
 		}
 		defer dst.Close()
 		done := make(chan struct{}, 2)
-		go func() { io.Copy(dst, conn); done <- struct{}{} }()
-		go func() { io.Copy(conn, dst); done <- struct{}{} }()
+		go func() { io.Copy(dst, peekedConn); done <- struct{}{} }()
+		go func() { io.Copy(peekedConn, dst); done <- struct{}{} }()
 		<-done
-	})
-	log.Printf("[sentinel] HTTPS proxy started → %s", target)
+	}
 }
 
 // setHTTPSMaintenanceHandler sets the dispatch handler to serve maintenance TLS page.
@@ -591,6 +711,7 @@ func (m *Manager) OnTunnelConnect(spot *TunnelSpot) {
 		ExternalPort: spot.ExternalPort,
 		Provider:     NewTunnelProvider(nil, spot.ID), // tunnel provider can't restart VMs
 		Priority:     10, // lower priority than GCP for HTTP
+		Pool:         spot.Pool,
 	}
 	m.backends.Add(b)
 

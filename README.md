@@ -181,6 +181,7 @@ Developer Laptop
 - **Bare-metal GPU nodes**: RTX 3090, RTX 4090, etc. connected via tunnel
 - **Windows Server VMs**: QEMU/KVM with RDP access
 - Containers from all backends appear in a single unified dashboard
+- **Multi-pool**: One sentinel can front multiple isolated clusters (e.g., `containarium-prod.example.com` and `containarium-lab.example.com`), each with its own primary VM and peers — see [docs/MULTI-POOL.md](docs/MULTI-POOL.md)
 - See [docs/WINDOWS-VM-SETUP.md](docs/WINDOWS-VM-SETUP.md) for Windows VMs
 
 🛡️ Sentinel HA (Spot Instance Recovery)

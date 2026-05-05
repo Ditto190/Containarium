@@ -18,6 +18,7 @@ type TunnelClient struct {
 	Token        string
 	SpotID       string
 	Ports        []int
+	Pool         string // optional pool tag sent in handshake
 }
 
 // Run connects to the sentinel and serves tunnel traffic.
@@ -68,6 +69,7 @@ func (tc *TunnelClient) connectAndServe(ctx context.Context) error {
 		Token:  tc.Token,
 		SpotID: tc.SpotID,
 		Ports:  tc.Ports,
+		Pool:   tc.Pool,
 	}
 	if err := writeHandshake(conn, hs); err != nil {
 		return fmt.Errorf("write handshake: %w", err)

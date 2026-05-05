@@ -50,6 +50,10 @@ var (
 	sentinelURL        string
 	peerAddrs          []string
 	localBackendID     string
+	pool               string
+	publicHostname     string
+	publicAliases      []string
+	publicPort         int
 )
 
 var daemonCmd = &cobra.Command{
@@ -128,6 +132,10 @@ func init() {
 	daemonCmd.Flags().StringVar(&sentinelURL, "sentinel-url", "", "Sentinel URL for auto-discovering tunnel peers (e.g., http://10.128.0.5:8081)")
 	daemonCmd.Flags().StringSliceVar(&peerAddrs, "peers", nil, "Static peer daemon addresses (e.g., 10.128.0.5:18001)")
 	daemonCmd.Flags().StringVar(&localBackendID, "backend-id", "", "This daemon's backend ID (defaults to hostname)")
+	daemonCmd.Flags().StringVar(&pool, "pool", "", "Pool name to scope sentinel peer discovery (empty = unscoped, see all peers)")
+	daemonCmd.Flags().StringVar(&publicHostname, "public-hostname", "", "Public hostname this primary serves (e.g. containarium-prod.kafeido.app); enables sentinel primary registration")
+	daemonCmd.Flags().StringSliceVar(&publicAliases, "public-aliases", nil, "Additional hostnames the primary's Caddy serves (e.g. api.kafeido.app,voice.kafeido.app); the sentinel SNI router treats these as aliases of --public-hostname")
+	daemonCmd.Flags().IntVar(&publicPort, "public-port", 443, "Public TLS port the sentinel forwards to (default 443)")
 }
 
 func runDaemon(cmd *cobra.Command, args []string) error {
@@ -432,6 +440,10 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 		SentinelURL:          sentinelURL,
 		Peers:                peerAddrs,
 		LocalBackendID:       resolveBackendID(localBackendID),
+		Pool:                 pool,
+		PublicHostname:       publicHostname,
+		PublicAliases:        publicAliases,
+		PublicPort:           publicPort,
 	}
 
 	// Create dual server

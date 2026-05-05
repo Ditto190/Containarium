@@ -12,6 +12,7 @@ type TunnelHandshake struct {
 	Token  string `json:"token"`
 	SpotID string `json:"spot_id"`
 	Ports  []int  `json:"ports"`
+	Pool   string `json:"pool,omitempty"`
 }
 
 // TunnelHandshakeResponse is sent by the sentinel back to the spot after

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Multi-pool architecture** — One sentinel can now front multiple independent Containarium clusters, each with its own primary VM, peers, core stack, and subdomain. See [docs/MULTI-POOL.md](docs/MULTI-POOL.md).
+  - **Pool tag on peers** — `containarium tunnel --pool=<name>` and `setup-peer.sh --pool=<name>` propagate a pool tag through the tunnel handshake to `TunnelSpot` and `Backend`. `GET /sentinel/peers?pool=<name>` filters by tag (omitting the param keeps the back-compat behavior of returning all peers).
+  - **Pool-scoped peer discovery** — `containarium daemon --pool=<name>` makes the primary's `PeerPool.discover()` append `?pool=` to its sentinel call, so a primary sees only its own pool's peers.
+  - **Primary self-registration** — `containarium daemon --public-hostname=<host> --public-port=<port>` makes the daemon `POST /sentinel/primaries` at startup, heartbeat every 30s, and `DELETE` on shutdown. Sentinel evicts entries that miss heartbeats for 90s. The sentinel auto-fills the primary's IP from the request's `RemoteAddr` so the daemon doesn't need to know its own routable address.
+  - **SNI-based routing on the sentinel** — The HTTPS dispatcher peeks the TLS ClientHello SNI and looks up the matching primary via the registry, forwarding TCP bytes (still TLS passthrough) to that primary's IP:port. Connections with no SNI, malformed handshakes, or unregistered hostnames fall back to the existing single-backend forwarding — fully back-compat for unpooled deployments.
+  - **Hostname aliases for app domains** — `--public-aliases foo.example,bar.example` (also `Primary.Aliases` in the registry) lets a primary advertise every hostname its Caddy serves, not just its own subdomain. The SNI router matches against `Hostname` plus all `Aliases`, so app domains like `api.kafeido.app` route to the correct pool's primary instead of falling through to the legacy single-backend default.
+
 ## [0.15.0] - 2026-03-31
 
 ### Added

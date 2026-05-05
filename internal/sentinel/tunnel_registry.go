@@ -22,6 +22,7 @@ type TunnelSpot struct {
 	LocalIP      string // assigned loopback alias, e.g. "127.0.0.2"
 	ExternalPort int    // externally reachable port for API access (e.g., 18001)
 	Ports        []int  // ports this spot serves
+	Pool         string // optional pool tag for grouping peers; empty = unpooled
 	Connected    time.Time
 }
 
@@ -44,7 +45,8 @@ func NewTunnelRegistry() *TunnelRegistry {
 
 // Register adds a new spot to the registry, assigns a loopback alias,
 // and configures it on the system. Returns the assigned loopback IP.
-func (r *TunnelRegistry) Register(spotID string, session *yamux.Session, ports []int) (string, error) {
+// pool is an optional tag for grouping peers; pass "" for unpooled.
+func (r *TunnelRegistry) Register(spotID string, session *yamux.Session, ports []int, pool string) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -84,11 +86,12 @@ func (r *TunnelRegistry) Register(spotID string, session *yamux.Session, ports [
 		LocalIP:      localIP,
 		ExternalPort: externalPort,
 		Ports:        ports,
+		Pool:         pool,
 		Connected:    time.Now(),
 	}
 	r.spots[spotID] = spot
 
-	log.Printf("[tunnel-registry] registered spot %q at %s (ports: %v)", spotID, localIP, ports)
+	log.Printf("[tunnel-registry] registered spot %q at %s (ports: %v, pool: %q)", spotID, localIP, ports, pool)
 	return localIP, nil
 }
 

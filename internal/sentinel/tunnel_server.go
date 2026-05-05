@@ -127,7 +127,7 @@ func (ts *TunnelServer) handleConnection(ctx context.Context, conn net.Conn) {
 	}
 
 	// Register in the registry (assigns loopback alias)
-	localIP, err := ts.registry.Register(hs.SpotID, session, hs.Ports)
+	localIP, err := ts.registry.Register(hs.SpotID, session, hs.Ports, hs.Pool)
 	if err != nil {
 		log.Printf("[tunnel-server] registration failed for %s: %v", hs.SpotID, err)
 		writeHandshakeResponse(conn, &TunnelHandshakeResponse{OK: false, Error: err.Error()})
