@@ -1,13 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import { Box, Typography, Button, CircularProgress, ToggleButton, ToggleButtonGroup, FormControl, InputLabel, Select, MenuItem, Chip, TextField, InputAdornment } from '@mui/material';
-import AddIcon from '@mui/icons-material/Add';
-import RefreshIcon from '@mui/icons-material/Refresh';
-import GridViewIcon from '@mui/icons-material/GridView';
-import ViewListIcon from '@mui/icons-material/ViewList';
-import SearchIcon from '@mui/icons-material/Search';
-import DnsIcon from '@mui/icons-material/Dns';
+import { Plus, RefreshCw, LayoutGrid, List, Search, Server as ServerIcon, Loader2 } from 'lucide-react';
 import { Container, ContainerMetricsWithRate, SystemInfo, BackendInfo } from '@/src/types/container';
 import ContainerNode from './ContainerNode';
 import ContainerListView from './ContainerListView';
@@ -39,262 +33,185 @@ interface ContainerTopologyProps {
 }
 
 export default function ContainerTopology({
-  containers,
-  coreServices,
-  metricsMap,
-  systemInfo,
-  isLoading,
-  error,
-  onCreateContainer,
-  onDeleteContainer,
-  onStartContainer,
-  onStopContainer,
-  onTerminalContainer,
-  onEditFirewall,
-  onEditLabels,
-  onResize,
-  onManageCollaborators,
-  onRefresh,
-  backends,
-  onSelectBackend,
+  containers, coreServices, metricsMap, systemInfo, isLoading, error,
+  onCreateContainer, onDeleteContainer, onStartContainer, onStopContainer,
+  onTerminalContainer, onEditFirewall, onEditLabels, onResize,
+  onManageCollaborators, onRefresh, backends, onSelectBackend,
 }: ContainerTopologyProps) {
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
-  const [groupByLabel, setGroupByLabel] = useState<string>('');
-  const [nodeFilter, setNodeFilter] = useState<string>('');
-  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [groupByLabel, setGroupByLabel] = useState('');
+  const [nodeFilter, setNodeFilter] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
 
-  const handleViewModeChange = (_: React.MouseEvent<HTMLElement>, newMode: ViewMode | null) => {
-    if (newMode !== null) {
-      setViewMode(newMode);
-    }
-  };
-
-  // Extract unique backend/node IDs
   const availableNodes = useMemo(() => {
-    const nodes = new Set<string>();
-    containers.forEach(c => {
-      if (c.backendId) nodes.add(c.backendId);
-    });
-    return Array.from(nodes).sort();
+    const s = new Set<string>();
+    containers.forEach(c => { if (c.backendId) s.add(c.backendId); });
+    return Array.from(s).sort();
   }, [containers]);
 
-  // Filter containers by node and search query
   const filteredContainers = useMemo(() => {
-    let result = containers;
-    if (nodeFilter) {
-      result = result.filter(c => c.backendId === nodeFilter);
-    }
+    let r = containers;
+    if (nodeFilter) r = r.filter(c => c.backendId === nodeFilter);
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
-      result = result.filter(c =>
-        c.name.toLowerCase().includes(q) ||
-        c.username.toLowerCase().includes(q) ||
-        (c.ipAddress && c.ipAddress.toLowerCase().includes(q))
-      );
+      r = r.filter(c => c.name.toLowerCase().includes(q) || c.username.toLowerCase().includes(q) || (c.ipAddress && c.ipAddress.toLowerCase().includes(q)));
     }
-    return result;
+    return r;
   }, [containers, nodeFilter, searchQuery]);
 
-  // Extract all unique label keys from containers
   const availableLabelKeys = useMemo(() => {
     const keys = new Set<string>();
-    filteredContainers.forEach(c => {
-      if (c.labels) {
-        Object.keys(c.labels).forEach(k => keys.add(k));
-      }
-    });
+    filteredContainers.forEach(c => { if (c.labels) Object.keys(c.labels).forEach(k => keys.add(k)); });
     return Array.from(keys).sort();
   }, [filteredContainers]);
 
-  // Group containers by selected label
   const groupedContainers = useMemo(() => {
-    if (!groupByLabel) {
-      return { '': filteredContainers };
-    }
+    if (!groupByLabel) return { '': filteredContainers };
     const groups: Record<string, Container[]> = {};
     filteredContainers.forEach(c => {
-      const labelValue = c.labels?.[groupByLabel] || '(no label)';
-      if (!groups[labelValue]) {
-        groups[labelValue] = [];
-      }
-      groups[labelValue].push(c);
+      const v = c.labels?.[groupByLabel] || '(no label)';
+      (groups[v] ||= []).push(c);
     });
-    // Sort group keys
-    const sortedGroups: Record<string, Container[]> = {};
-    Object.keys(groups).sort().forEach(key => {
-      sortedGroups[key] = groups[key];
-    });
-    return sortedGroups;
+    return Object.fromEntries(Object.keys(groups).sort().map(k => [k, groups[k]]));
   }, [filteredContainers, groupByLabel]);
 
   if (isLoading && containers.length === 0) {
     return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 300 }}>
-        <CircularProgress />
-      </Box>
+      <div className="flex min-h-[300px] items-center justify-center">
+        <Loader2 size={24} className="animate-spin text-[var(--text-secondary)]" />
+      </div>
     );
   }
 
   if (error) {
     return (
-      <Box sx={{ p: 3, textAlign: 'center' }}>
-        <Typography color="error" gutterBottom>
-          Failed to load containers
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          {error.message}
-        </Typography>
-        <Button onClick={onRefresh} sx={{ mt: 2 }}>
+      <div className="flex flex-col items-center justify-center gap-2 py-16">
+        <p className="text-sm font-medium text-[var(--c-red)]">Failed to load containers</p>
+        <p className="text-xs text-[var(--text-muted)]">{error.message}</p>
+        <button onClick={onRefresh} className="mt-2 rounded-md border border-[var(--border)] px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-2)] transition-colors">
           Retry
-        </Button>
-      </Box>
+        </button>
+      </div>
     );
   }
 
   return (
-    <Box sx={{ p: 3 }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h5">
-          Containers ({filteredContainers.length}{filteredContainers.length !== containers.length ? ` / ${containers.length}` : ''})
-        </Typography>
-        <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-          <TextField
-            size="small"
+    <div className="p-6">
+      {/* Toolbar */}
+      <div className="mb-6 flex flex-wrap items-center gap-2">
+        <h1 className="text-base font-semibold text-[var(--text)] mr-auto">
+          Containers
+          <span className="ml-2 text-sm font-normal text-[var(--text-muted)]">
+            {filteredContainers.length}{filteredContainers.length !== containers.length ? ` / ${containers.length}` : ''}
+          </span>
+        </h1>
+
+        {/* Search */}
+        <div className="relative">
+          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" />
+          <input
+            type="text"
             placeholder="Search..."
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            sx={{ width: 180 }}
-            InputProps={{
-              startAdornment: (
-                <InputAdornment position="start">
-                  <SearchIcon fontSize="small" color="action" />
-                </InputAdornment>
-              ),
-            }}
+            onChange={e => setSearchQuery(e.target.value)}
+            className="w-44 rounded-md border border-[var(--border-subtle)] bg-[var(--surface)] py-1.5 pl-7 pr-3 text-xs text-[var(--text)] placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:outline-none"
           />
-          {availableNodes.length > 1 && (
-            <FormControl size="small" sx={{ minWidth: 150 }}>
-              <InputLabel id="node-filter-label">Node</InputLabel>
-              <Select
-                labelId="node-filter-label"
-                value={nodeFilter}
-                label="Node"
-                onChange={(e) => setNodeFilter(e.target.value)}
-                startAdornment={
-                  <InputAdornment position="start">
-                    <DnsIcon fontSize="small" color="action" />
-                  </InputAdornment>
-                }
-              >
-                <MenuItem value="">
-                  <em>All nodes</em>
-                </MenuItem>
-                {availableNodes.map(node => (
-                  <MenuItem key={node} value={node}>{node}</MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-          )}
-          {availableLabelKeys.length > 0 && (
-            <FormControl size="small" sx={{ minWidth: 140 }}>
-              <InputLabel id="group-by-label">Group by</InputLabel>
-              <Select
-                labelId="group-by-label"
-                value={groupByLabel}
-                label="Group by"
-                onChange={(e) => setGroupByLabel(e.target.value)}
-              >
-                <MenuItem value="">
-                  <em>None</em>
-                </MenuItem>
-                {availableLabelKeys.map(key => (
-                  <MenuItem key={key} value={key}>{key}</MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-          )}
-          <ToggleButtonGroup
-            value={viewMode}
-            exclusive
-            onChange={handleViewModeChange}
-            size="small"
+        </div>
+
+        {/* Node filter */}
+        {availableNodes.length > 1 && (
+          <div className="relative">
+            <ServerIcon size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" />
+            <select
+              value={nodeFilter}
+              onChange={e => setNodeFilter(e.target.value)}
+              className="w-44 appearance-none rounded-md border border-[var(--border-subtle)] bg-[var(--surface)] py-1.5 pl-7 pr-3 text-xs text-[var(--text)] focus:border-[var(--accent)] focus:outline-none"
+            >
+              <option value="">All nodes</option>
+              {availableNodes.map(n => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </div>
+        )}
+
+        {/* Group by */}
+        {availableLabelKeys.length > 0 && (
+          <select
+            value={groupByLabel}
+            onChange={e => setGroupByLabel(e.target.value)}
+            className="appearance-none rounded-md border border-[var(--border-subtle)] bg-[var(--surface)] px-3 py-1.5 text-xs text-[var(--text)] focus:border-[var(--accent)] focus:outline-none"
           >
-            <ToggleButton value="grid" aria-label="grid view">
-              <GridViewIcon fontSize="small" />
-            </ToggleButton>
-            <ToggleButton value="list" aria-label="list view">
-              <ViewListIcon fontSize="small" />
-            </ToggleButton>
-          </ToggleButtonGroup>
-          <Button
-            variant="outlined"
-            startIcon={<RefreshIcon />}
-            onClick={onRefresh}
-            disabled={isLoading}
-          >
-            Refresh
-          </Button>
-          <Button
-            variant="contained"
-            startIcon={<AddIcon />}
-            onClick={onCreateContainer}
-          >
-            Create Container
-          </Button>
-        </Box>
-      </Box>
+            <option value="">Group by…</option>
+            {availableLabelKeys.map(k => <option key={k} value={k}>{k}</option>)}
+          </select>
+        )}
+
+        {/* View mode toggle */}
+        <div className="flex rounded-md border border-[var(--border-subtle)] overflow-hidden">
+          {(['grid', 'list'] as const).map((mode) => (
+            <button
+              key={mode}
+              onClick={() => setViewMode(mode)}
+              className={`flex items-center gap-1 px-2.5 py-1.5 text-xs transition-colors ${viewMode === mode ? 'bg-[var(--accent)] text-white' : 'bg-[var(--surface)] text-[var(--text-secondary)] hover:bg-[var(--surface-2)]'}`}
+            >
+              {mode === 'grid' ? <LayoutGrid size={13} /> : <List size={13} />}
+            </button>
+          ))}
+        </div>
+
+        <button
+          onClick={onRefresh}
+          disabled={isLoading}
+          className="flex items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--surface)] px-3 py-1.5 text-xs text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-2)] disabled:opacity-50"
+        >
+          <RefreshCw size={12} className={isLoading ? 'animate-spin' : ''} />
+          Refresh
+        </button>
+
+        <button
+          onClick={onCreateContainer}
+          className="flex items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 py-1.5 text-xs font-medium text-white hover:bg-[var(--accent-hover)] transition-colors"
+        >
+          <Plus size={13} />
+          Create Container
+        </button>
+      </div>
 
       {/* System Resources */}
-      <SystemResourcesCard
-        systemInfo={systemInfo || null}
-        backends={backends}
-        onSelectBackend={onSelectBackend}
-      />
+      <SystemResourcesCard systemInfo={systemInfo || null} backends={backends} onSelectBackend={onSelectBackend} />
 
-      {/* Core Infrastructure Services */}
+      {/* Core Infrastructure */}
       {coreServices && coreServices.length > 0 && (
         <CoreServicesSection services={coreServices} />
       )}
 
+      {/* Empty state */}
       {filteredContainers.length === 0 ? (
-        <Box sx={{ textAlign: 'center', py: 6 }}>
-          <Typography color="text.secondary" gutterBottom>
+        <div className="flex flex-col items-center justify-center gap-2 py-16">
+          <p className="text-sm text-[var(--text-secondary)]">
             {containers.length === 0 ? 'No containers found' : 'No containers match the current filters'}
-          </Typography>
+          </p>
           {containers.length === 0 ? (
-            <Button
-              variant="contained"
-              startIcon={<AddIcon />}
-              onClick={onCreateContainer}
-              sx={{ mt: 2 }}
-            >
+            <button onClick={onCreateContainer} className="mt-2 flex items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 py-1.5 text-xs font-medium text-white hover:bg-[var(--accent-hover)] transition-colors">
+              <Plus size={13} />
               Create your first container
-            </Button>
+            </button>
           ) : (
-            <Button
-              variant="outlined"
-              onClick={() => { setNodeFilter(''); setSearchQuery(''); }}
-              sx={{ mt: 2 }}
-            >
+            <button onClick={() => { setNodeFilter(''); setSearchQuery(''); }} className="mt-2 rounded-md border border-[var(--border)] px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-2)] transition-colors">
               Clear filters
-            </Button>
+            </button>
           )}
-        </Box>
+        </div>
       ) : (
-        <>
+        <div className="flex flex-col gap-6">
           {Object.entries(groupedContainers).map(([groupName, groupContainers]) => (
-            <Box key={groupName} sx={{ mb: groupByLabel ? 4 : 0 }}>
+            <div key={groupName}>
               {groupByLabel && (
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, mt: 2 }}>
-                  <Chip
-                    label={`${groupByLabel}: ${groupName}`}
-                    color={groupName === '(no label)' ? 'default' : 'primary'}
-                    variant="outlined"
-                  />
-                  <Typography variant="body2" color="text.secondary">
-                    ({groupContainers.length} container{groupContainers.length !== 1 ? 's' : ''})
-                  </Typography>
-                </Box>
+                <div className="mb-3 flex items-center gap-2">
+                  <span className="rounded-full border border-blue-500/30 bg-blue-500/10 px-2.5 py-0.5 text-xs text-[var(--c-blue)]">
+                    {groupByLabel}: {groupName}
+                  </span>
+                  <span className="text-xs text-[var(--text-muted)]">{groupContainers.length} container{groupContainers.length !== 1 ? 's' : ''}</span>
+                </div>
               )}
               {viewMode === 'list' ? (
                 <ContainerListView
@@ -310,14 +227,8 @@ export default function ContainerTopology({
                   onManageCollaborators={onManageCollaborators}
                 />
               ) : (
-                <Box
-                  sx={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
-                    gap: 2,
-                  }}
-                >
-                  {groupContainers.map((container) => (
+                <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))' }}>
+                  {groupContainers.map(container => (
                     <ContainerNode
                       key={container.name}
                       container={container}
@@ -327,16 +238,16 @@ export default function ContainerTopology({
                       onStop={onStopContainer}
                       onTerminal={onTerminalContainer}
                       onEditFirewall={onEditFirewall}
-                      onEditLabels={onEditLabels ? (username: string) => onEditLabels(username, container.labels || {}) : undefined}
-                      onResize={onResize ? (username: string) => onResize(username, { cpu: container.cpu, memory: container.memory, disk: container.disk }) : undefined}
+                      onEditLabels={onEditLabels ? (u) => onEditLabels(u, container.labels || {}) : undefined}
+                      onResize={onResize ? (u) => onResize(u, { cpu: container.cpu, memory: container.memory, disk: container.disk }) : undefined}
                     />
                   ))}
-                </Box>
+                </div>
               )}
-            </Box>
+            </div>
           ))}
-        </>
+        </div>
       )}
-    </Box>
+    </div>
   );
 }

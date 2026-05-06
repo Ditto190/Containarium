@@ -3,15 +3,10 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { usePathname } from 'next/navigation';
-import { Box, Typography, CircularProgress, Tabs, Tab } from '@mui/material';
-import DnsIcon from '@mui/icons-material/Dns';
-import AppsIcon from '@mui/icons-material/Apps';
-import HubIcon from '@mui/icons-material/Hub';
-import TimelineIcon from '@mui/icons-material/Timeline';
-import InsightsIcon from '@mui/icons-material/Insights';
-import ShieldIcon from '@mui/icons-material/Shield';
-import PolicyIcon from '@mui/icons-material/Policy';
-import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive';
+import {
+  Server as ServerIcon, LayoutGrid, Network, Activity, BarChart2,
+  Shield, ClipboardList, Bell, Loader2
+} from 'lucide-react';
 import AppBar from '@/src/components/layout/AppBar';
 import ServerTabs from '@/src/components/layout/ServerTabs';
 import AddServerDialog from '@/src/components/servers/AddServerDialog';
@@ -39,7 +34,6 @@ import { CreateContainerRequest, ContainerMetricsWithRate } from '@/src/types/co
 import { Server } from '@/src/types/server';
 import { ACLPreset } from '@/src/types/app';
 
-// Dynamic import for TerminalDialog to avoid SSR issues with xterm
 const TerminalDialog = dynamic(
   () => import('@/src/components/containers/TerminalDialog'),
   { ssr: false }
@@ -58,6 +52,17 @@ const TAB_INDICES: Record<string, number> = {
   '/alerts/': 7,
 };
 
+const TABS = [
+  { label: 'Containers', icon: ServerIcon },
+  { label: 'Apps',       icon: LayoutGrid },
+  { label: 'Network',    icon: Network },
+  { label: 'Traffic',    icon: Activity },
+  { label: 'Monitoring', icon: BarChart2 },
+  { label: 'Security',   icon: Shield },
+  { label: 'Audit',      icon: ClipboardList },
+  { label: 'Alerts',     icon: Bell },
+] as const;
+
 export default function Home() {
   const pathname = usePathname();
 
@@ -72,12 +77,10 @@ export default function Home() {
     isLoading: serversLoading,
   } = useServers();
 
-  // Derive tab from URL path
   const currentPath = (pathname || '/').replace(/\/?$/, '/');
   const tabFromPath = TAB_INDICES[currentPath] ?? 0;
   const [viewTab, setViewTabState] = useState(tabFromPath);
 
-  // Handle browser back/forward
   useEffect(() => {
     const onPopState = () => {
       const path = window.location.pathname.replace(/^\/webui/, '').replace(/\/?$/, '/');
@@ -87,14 +90,12 @@ export default function Home() {
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
-  // Update tab + URL without full page reload
   const setViewTab = useCallback((newTab: number) => {
     setViewTabState(newTab);
     const path = '/webui' + (TAB_PATHS[newTab] || '/containers/');
     window.history.pushState(null, '', path);
   }, []);
 
-  // Container hooks
   const {
     containers,
     coreServices,
@@ -114,11 +115,9 @@ export default function Home() {
     refresh: refreshContainers,
   } = useContainers(activeServer);
 
-  // Metrics hook
   const hasRunningContainers = containers.some(c => c.state === 'Running');
   const { metrics } = useMetrics(activeServer, hasRunningContainers);
 
-  // Apps hooks
   const {
     apps,
     isLoading: appsLoading,
@@ -130,7 +129,6 @@ export default function Home() {
     refresh: refreshApps,
   } = useApps(activeServer);
 
-  // Network hooks
   const [includeStopped, setIncludeStopped] = useState(false);
   const { routes, isLoading: routesLoading, error: routesError, addRoute, deleteRoute, updateRoute, refresh: refreshRoutes } = useRoutes(activeServer);
   const { routes: passthroughRoutes, isLoading: passthroughLoading, addPassthroughRoute, deletePassthroughRoute, updatePassthroughRoute, refresh: refreshPassthrough } = usePassthroughRoutes(activeServer);
@@ -138,124 +136,49 @@ export default function Home() {
   const { presets, isLoading: presetsLoading } = useACLPresets(activeServer);
   const { records: dnsRecords, baseDomain, refresh: refreshDNS } = useDNSRecords(activeServer);
 
-  // Firewall editor state - now per container (DevBox), not per app
   const [firewallEditorOpen, setFirewallEditorOpen] = useState(false);
   const [selectedContainer, setSelectedContainer] = useState<string | null>(null);
-  const { acl, isLoading: aclLoading, updateACL } = useContainerACL(
-    activeServer,
-    selectedContainer || ''
-  );
+  const { acl, isLoading: aclLoading, updateACL } = useContainerACL(activeServer, selectedContainer || '');
 
-  // Collaborator state and hooks
   const [collaboratorContainer, setCollaboratorContainer] = useState<string | null>(null);
-  const {
-    collaborators,
-    isLoading: collaboratorsLoading,
-    addCollaborator,
-    removeCollaborator,
-  } = useCollaborators(activeServer, collaboratorContainer);
+  const { collaborators, isLoading: collaboratorsLoading, addCollaborator, removeCollaborator } = useCollaborators(activeServer, collaboratorContainer);
 
-  // Convert metrics array to a map by container name for easy lookup
   const metricsMap = useMemo(() => {
     const map: Record<string, ContainerMetricsWithRate> = {};
-    for (const m of metrics) {
-      map[m.name] = m;
-    }
+    for (const m of metrics) map[m.name] = m;
     return map;
   }, [metrics]);
 
-  // Dialog states
   const [serverDialogOpen, setServerDialogOpen] = useState(false);
   const [editingServer, setEditingServer] = useState<Server | null>(null);
   const [createContainerOpen, setCreateContainerOpen] = useState(false);
-  const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; containerName: string }>({
-    open: false,
-    containerName: '',
-  });
+  const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; containerName: string }>({ open: false, containerName: '' });
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalUsername, setTerminalUsername] = useState('');
   const [labelEditorOpen, setLabelEditorOpen] = useState(false);
-  const [labelEditorContainer, setLabelEditorContainer] = useState<{username: string, labels: Record<string, string>} | null>(null);
+  const [labelEditorContainer, setLabelEditorContainer] = useState<{ username: string; labels: Record<string, string> } | null>(null);
   const [resizeDialogOpen, setResizeDialogOpen] = useState(false);
-  const [resizeTarget, setResizeTarget] = useState<{username: string, cpu: string, memory: string, disk: string} | null>(null);
-
-  // Server handlers
-  const handleAddServer = async (name: string, endpoint: string, token: string) => {
-    await addServer(name, endpoint, token);
-  };
-
-  const handleUpdateServer = async (serverId: string, name: string, endpoint: string, token: string) => {
-    await updateServer(serverId, name, endpoint, token);
-  };
+  const [resizeTarget, setResizeTarget] = useState<{ username: string; cpu: string; memory: string; disk: string } | null>(null);
 
   const handleEditServer = (serverId: string) => {
     const server = servers.find(s => s.id === serverId);
-    if (server) {
-      setEditingServer(server);
-      setServerDialogOpen(true);
-    }
-  };
-
-  const handleCloseServerDialog = () => {
-    setServerDialogOpen(false);
-    setEditingServer(null);
-  };
-
-  // Container handlers
-  const handleCreateContainer = async (
-    request: CreateContainerRequest,
-    onProgress?: (progress: CreateContainerProgress) => void
-  ) => {
-    await createContainer(request, onProgress);
-  };
-
-  const handleDeleteContainer = (username: string) => {
-    setDeleteConfirm({ open: true, containerName: username });
+    if (server) { setEditingServer(server); setServerDialogOpen(true); }
   };
 
   const handleConfirmDelete = async () => {
     await deleteContainer(deleteConfirm.containerName, true);
   };
 
-  const handleOpenTerminal = (username: string) => {
-    setTerminalUsername(username);
-    setTerminalOpen(true);
-  };
+  const handleCloseTerminal = () => { setTerminalOpen(false); setTerminalUsername(''); };
 
-  const handleCloseTerminal = () => {
-    setTerminalOpen(false);
-    setTerminalUsername('');
-  };
-
-  // Label editor handlers
   const handleEditLabels = (username: string, labels: Record<string, string>) => {
     setLabelEditorContainer({ username, labels });
     setLabelEditorOpen(true);
   };
 
-  const handleCloseLabelEditor = () => {
-    setLabelEditorOpen(false);
-    setLabelEditorContainer(null);
-  };
-
-  // Resize handlers
   const handleOpenResize = (username: string, currentResources: { cpu: string; memory: string; disk: string }) => {
     setResizeTarget({ username, ...currentResources });
     setResizeDialogOpen(true);
-  };
-
-  // Collaborator handlers
-  const handleManageCollaborators = (username: string) => {
-    setCollaboratorContainer(username);
-  };
-
-  const handleCloseCollaborators = () => {
-    setCollaboratorContainer(null);
-  };
-
-  const handleCloseResize = () => {
-    setResizeDialogOpen(false);
-    setResizeTarget(null);
   };
 
   const handleResize = async (resources: { cpu?: string; memory?: string; disk?: string }) => {
@@ -263,36 +186,11 @@ export default function Home() {
     await resizeContainer(resizeTarget.username, resources);
   };
 
-  // App handlers
-  const handleStopApp = async (username: string, appName: string) => {
-    await stopApp(username, appName);
-  };
-
-  const handleStartApp = async (username: string, appName: string) => {
-    await startApp(username, appName);
-  };
-
-  const handleRestartApp = async (username: string, appName: string) => {
-    await restartApp(username, appName);
-  };
-
-  const handleDeleteApp = async (username: string, appName: string) => {
-    await deleteApp(username, appName, false);
-  };
-
-  // Firewall handlers - now per container (DevBox), not per app
   const handleEditContainerFirewall = (username: string) => {
     setSelectedContainer(username);
     setFirewallEditorOpen(true);
   };
 
-  const handleSaveFirewall = async (preset: ACLPreset) => {
-    if (selectedContainer) {
-      await updateACL(preset);
-    }
-  };
-
-  // Network refresh handler
   const handleRefreshNetwork = () => {
     refreshRoutes();
     refreshTopology();
@@ -301,14 +199,14 @@ export default function Home() {
 
   if (serversLoading) {
     return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh' }}>
-        <CircularProgress />
-      </Box>
+      <div className="flex h-screen items-center justify-center bg-[var(--background)]">
+        <Loader2 size={24} className="animate-spin text-[var(--text-secondary)]" />
+      </div>
     );
   }
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
+    <div className="flex h-screen flex-col overflow-hidden bg-[var(--background)]">
       <AppBar onAddServer={() => setServerDialogOpen(true)} />
 
       <ServerTabs
@@ -320,36 +218,33 @@ export default function Home() {
       />
 
       {servers.length === 0 ? (
-        <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}>
-          <Typography variant="h5" color="text.secondary" gutterBottom>
-            No servers added
-          </Typography>
-          <Typography color="text.secondary">
-            Click "Add Server" to connect to a Containarium server
-          </Typography>
-        </Box>
+        <div className="flex flex-1 flex-col items-center justify-center gap-2">
+          <p className="text-sm font-medium text-[var(--text)]">No servers added</p>
+          <p className="text-xs text-[var(--text-secondary)]">Click &ldquo;Add Server&rdquo; to connect to a Containarium server</p>
+        </div>
       ) : activeServer ? (
         <>
-          {/* View Tabs */}
-          <Box sx={{ borderBottom: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
-            <Tabs
-              value={viewTab}
-              onChange={(_, newValue) => setViewTab(newValue)}
-              sx={{ px: 2 }}
-            >
-              <Tab icon={<DnsIcon />} iconPosition="start" label="Containers" />
-              <Tab icon={<AppsIcon />} iconPosition="start" label="Apps" />
-              <Tab icon={<HubIcon />} iconPosition="start" label="Network" />
-              <Tab icon={<TimelineIcon />} iconPosition="start" label="Traffic" />
-              <Tab icon={<InsightsIcon />} iconPosition="start" label="Monitoring" />
-              <Tab icon={<ShieldIcon />} iconPosition="start" label="Security" />
-              <Tab icon={<PolicyIcon />} iconPosition="start" label="Audit" />
-              <Tab icon={<NotificationsActiveIcon />} iconPosition="start" label="Alerts" />
-            </Tabs>
-          </Box>
+          {/* View tab bar */}
+          <div className="flex items-end gap-0 overflow-x-auto border-b border-[var(--border-subtle)] bg-[var(--surface)] px-4 shrink-0">
+            {TABS.map(({ label, icon: Icon }, i) => (
+              <button
+                key={label}
+                onClick={() => setViewTab(i)}
+                className={[
+                  'flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium transition-colors border-b-2 -mb-px',
+                  viewTab === i
+                    ? 'border-[var(--accent)] text-[var(--accent)]'
+                    : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text)]',
+                ].join(' ')}
+              >
+                <Icon size={13} />
+                {label}
+              </button>
+            ))}
+          </div>
 
-          {/* Tab Content */}
-          <Box sx={{ flex: 1, overflow: 'auto' }}>
+          {/* Tab content */}
+          <div className="flex-1 overflow-auto">
             {viewTab === 0 && (
               <ContainerTopology
                 containers={containers}
@@ -359,33 +254,31 @@ export default function Home() {
                 isLoading={containersLoading}
                 error={containersError as Error | null}
                 onCreateContainer={() => setCreateContainerOpen(true)}
-                onDeleteContainer={handleDeleteContainer}
+                onDeleteContainer={(u) => setDeleteConfirm({ open: true, containerName: u })}
                 onStartContainer={startContainer}
                 onStopContainer={stopContainer}
-                onTerminalContainer={handleOpenTerminal}
+                onTerminalContainer={(u) => { setTerminalUsername(u); setTerminalOpen(true); }}
                 onEditFirewall={handleEditContainerFirewall}
                 onEditLabels={handleEditLabels}
                 onResize={handleOpenResize}
-                onManageCollaborators={handleManageCollaborators}
+                onManageCollaborators={(u) => setCollaboratorContainer(u)}
                 onRefresh={refreshContainers}
                 backends={backends}
                 onSelectBackend={getSystemInfoForBackend}
               />
             )}
-
             {viewTab === 1 && (
               <AppsView
                 apps={apps}
                 isLoading={appsLoading}
                 error={appsError as Error | null}
-                onStopApp={handleStopApp}
-                onStartApp={handleStartApp}
-                onRestartApp={handleRestartApp}
-                onDeleteApp={handleDeleteApp}
+                onStopApp={async (u, a) => { await stopApp(u, a); }}
+                onStartApp={async (u, a) => { await startApp(u, a); }}
+                onRestartApp={async (u, a) => { await restartApp(u, a); }}
+                onDeleteApp={async (u, a) => { await deleteApp(u, a, false); }}
                 onRefresh={refreshApps}
               />
             )}
-
             {viewTab === 2 && (
               <NetworkTopologyView
                 topology={topology}
@@ -397,78 +290,41 @@ export default function Home() {
                 error={(topologyError || routesError) as Error | null}
                 includeStopped={includeStopped}
                 onIncludeStoppedChange={setIncludeStopped}
-                onAddRoute={async (domain, targetIp, targetPort, protocol) => {
-                  await addRoute(domain, targetIp, targetPort, protocol);
-                }}
-                onDeleteRoute={async (domain) => {
-                  await deleteRoute(domain);
-                }}
-                onToggleRoute={async (domain, enabled) => {
-                  await updateRoute(domain, { active: enabled });
-                }}
-                onAddPassthroughRoute={async (externalPort, targetIp, targetPort, protocol, containerName) => {
-                  await addPassthroughRoute(externalPort, targetIp, targetPort, protocol, containerName);
-                }}
-                onDeletePassthroughRoute={async (externalPort, protocol) => {
-                  await deletePassthroughRoute(externalPort, protocol);
-                }}
-                onTogglePassthroughRoute={async (externalPort, protocol, enabled) => {
-                  await updatePassthroughRoute(externalPort, protocol, { active: enabled });
-                }}
-                onRefresh={() => {
-                  handleRefreshNetwork();
-                  refreshPassthrough();
-                }}
+                onAddRoute={async (d, ip, p, proto) => { await addRoute(d, ip, p, proto); }}
+                onDeleteRoute={async (d) => { await deleteRoute(d); }}
+                onToggleRoute={async (d, en) => { await updateRoute(d, { active: en }); }}
+                onAddPassthroughRoute={async (ep, ip, p, proto, cn) => { await addPassthroughRoute(ep, ip, p, proto, cn); }}
+                onDeletePassthroughRoute={async (ep, proto) => { await deletePassthroughRoute(ep, proto); }}
+                onTogglePassthroughRoute={async (ep, proto, en) => { await updatePassthroughRoute(ep, proto, { active: en }); }}
+                onRefresh={() => { handleRefreshNetwork(); refreshPassthrough(); }}
               />
             )}
-
-            {viewTab === 3 && (
-              <TrafficView
-                server={activeServer}
-                containers={containers}
-                proxyRoutes={routes}
-                passthroughRoutes={passthroughRoutes}
-              />
-            )}
-
-            {viewTab === 4 && (
-              <MonitoringView server={activeServer} />
-            )}
-
-            {viewTab === 5 && (
-              <SecurityView server={activeServer} />
-            )}
-
-            {viewTab === 6 && (
-              <AuditView server={activeServer} />
-            )}
-
-            {viewTab === 7 && (
-              <AlertsView server={activeServer} />
-            )}
-          </Box>
+            {viewTab === 3 && <TrafficView server={activeServer} containers={containers} proxyRoutes={routes} passthroughRoutes={passthroughRoutes} />}
+            {viewTab === 4 && <MonitoringView server={activeServer} />}
+            {viewTab === 5 && <SecurityView server={activeServer} />}
+            {viewTab === 6 && <AuditView server={activeServer} />}
+            {viewTab === 7 && <AlertsView server={activeServer} />}
+          </div>
         </>
       ) : (
-        <Box sx={{ flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-          <Typography color="text.secondary">
-            Select a server to view containers
-          </Typography>
-        </Box>
+        <div className="flex flex-1 items-center justify-center">
+          <p className="text-sm text-[var(--text-secondary)]">Select a server to view containers</p>
+        </div>
       )}
 
       {/* Dialogs */}
       <AddServerDialog
         open={serverDialogOpen}
-        onClose={handleCloseServerDialog}
-        onAdd={handleAddServer}
-        onUpdate={handleUpdateServer}
+        onClose={() => { setServerDialogOpen(false); setEditingServer(null); }}
+        onAdd={async (name, endpoint, token) => { await addServer(name, endpoint, token); }}
+        onUpdate={async (id, name, endpoint, token) => { await updateServer(id, name, endpoint, token); }}
         editServer={editingServer}
       />
 
       <CreateContainerDialog
         open={createContainerOpen}
         onClose={() => setCreateContainerOpen(false)}
-        onSubmit={handleCreateContainer}
+        onSubmit={async (req: CreateContainerRequest, onProgress?: (p: CreateContainerProgress) => void) => createContainer(req, onProgress)}
         networkCidr={systemInfo?.networkCidr}
         backends={backends}
         server={activeServer}
@@ -492,43 +348,33 @@ export default function Home() {
         />
       )}
 
-      {/* Firewall Editor - per container (DevBox) */}
       <FirewallEditor
         open={firewallEditorOpen}
-        onClose={() => {
-          setFirewallEditorOpen(false);
-          setSelectedContainer(null);
-        }}
+        onClose={() => { setFirewallEditorOpen(false); setSelectedContainer(null); }}
         acl={acl || null}
         presets={presets}
         isLoading={aclLoading || presetsLoading}
         appName={selectedContainer ? `${selectedContainer}-container` : ''}
         username={selectedContainer || ''}
-        onSave={handleSaveFirewall}
+        onSave={async (preset: ACLPreset) => { if (selectedContainer) await updateACL(preset); }}
       />
 
-      {/* Label Editor Dialog */}
       {labelEditorContainer && (
         <LabelEditorDialog
           open={labelEditorOpen}
-          onClose={handleCloseLabelEditor}
+          onClose={() => { setLabelEditorOpen(false); setLabelEditorContainer(null); }}
           containerName={`${labelEditorContainer.username}-container`}
           username={labelEditorContainer.username}
           currentLabels={labelEditorContainer.labels}
-          onSave={async (labels) => {
-            await setLabels(labelEditorContainer.username, labels);
-          }}
-          onRemove={async (key) => {
-            await removeLabel(labelEditorContainer.username, key);
-          }}
+          onSave={async (labels) => { await setLabels(labelEditorContainer.username, labels); }}
+          onRemove={async (key) => { await removeLabel(labelEditorContainer.username, key); }}
         />
       )}
 
-      {/* Resize Container Dialog */}
       {resizeTarget && (
         <ResizeContainerDialog
           open={resizeDialogOpen}
-          onClose={handleCloseResize}
+          onClose={() => { setResizeDialogOpen(false); setResizeTarget(null); }}
           containerName={`${resizeTarget.username}-container`}
           username={resizeTarget.username}
           currentCpu={resizeTarget.cpu}
@@ -537,28 +383,21 @@ export default function Home() {
           memoryUsageBytes={metricsMap[`${resizeTarget.username}-container`]?.memoryUsageBytes}
           diskUsageBytes={metricsMap[`${resizeTarget.username}-container`]?.diskUsageBytes}
           onResize={handleResize}
-          onCleanupDisk={async () => {
-            if (!resizeTarget) throw new Error('No container selected');
-            return cleanupDisk(resizeTarget.username);
-          }}
+          onCleanupDisk={async () => { if (!resizeTarget) throw new Error('No container selected'); return cleanupDisk(resizeTarget.username); }}
         />
       )}
 
-      {/* Collaborators Dialog */}
       {collaboratorContainer && (
         <CollaboratorsDialog
           open={!!collaboratorContainer}
-          onClose={handleCloseCollaborators}
+          onClose={() => setCollaboratorContainer(null)}
           ownerUsername={collaboratorContainer}
           collaborators={collaborators}
           isLoading={collaboratorsLoading}
-          onAdd={async (req) => {
-            const result = await addCollaborator(req);
-            return { sshCommand: result.sshCommand };
-          }}
+          onAdd={async (req) => { const result = await addCollaborator(req); return { sshCommand: result.sshCommand }; }}
           onRemove={removeCollaborator}
         />
       )}
-    </Box>
+    </div>
   );
 }

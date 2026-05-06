@@ -1,9 +1,6 @@
 'use client';
 
-import { Tabs, Tab, Box } from '@mui/material';
-import CloseIcon from '@mui/icons-material/Close';
-import EditIcon from '@mui/icons-material/Edit';
-import CircleIcon from '@mui/icons-material/Circle';
+import { X, Pencil } from 'lucide-react';
 import { ServerWithStatus } from '@/src/types/server';
 
 interface ServerTabsProps {
@@ -14,93 +11,58 @@ interface ServerTabsProps {
   onEditServer: (serverId: string) => void;
 }
 
-function getStatusColor(status: ServerWithStatus['status']): 'success' | 'error' | 'warning' | 'default' {
+function statusDot(status: ServerWithStatus['status']) {
   switch (status) {
-    case 'connected':
-      return 'success';
-    case 'error':
-      return 'error';
-    case 'connecting':
-      return 'warning';
-    default:
-      return 'default';
+    case 'connected':  return 'bg-emerald-500';
+    case 'error':      return 'bg-red-500';
+    case 'connecting': return 'bg-amber-400 animate-pulse';
+    default:           return 'bg-zinc-500';
   }
 }
 
 export default function ServerTabs({ servers, activeServerId, onServerChange, onRemoveServer, onEditServer }: ServerTabsProps) {
-  if (servers.length === 0) {
-    return null;
-  }
-
-  const handleChange = (_event: React.SyntheticEvent, newValue: string) => {
-    onServerChange(newValue);
-  };
+  if (servers.length === 0) return null;
 
   return (
-    <Box sx={{ borderBottom: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
-      <Tabs
-        value={activeServerId || false}
-        onChange={handleChange}
-        variant="scrollable"
-        scrollButtons="auto"
-      >
-        {servers.map((server) => (
-          <Tab
+    <div className="flex items-end gap-0.5 overflow-x-auto border-b border-[var(--border-subtle)] bg-[var(--surface)] px-2 shrink-0">
+      {servers.map((server) => {
+        const active = server.id === activeServerId;
+        return (
+          <button
             key={server.id}
-            value={server.id}
-            label={
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <CircleIcon
-                  sx={{
-                    fontSize: 10,
-                    color: getStatusColor(server.status) === 'success' ? 'success.main' :
-                           getStatusColor(server.status) === 'error' ? 'error.main' :
-                           getStatusColor(server.status) === 'warning' ? 'warning.main' :
-                           'grey.500'
-                  }}
-                />
-                <span>{server.name}</span>
-                <Box
-                  component="span"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onEditServer(server.id);
-                  }}
-                  sx={{
-                    ml: 0.5,
-                    p: 0.25,
-                    display: 'inline-flex',
-                    cursor: 'pointer',
-                    borderRadius: '50%',
-                    '&:hover': { bgcolor: 'action.hover' },
-                  }}
-                  title="Edit server"
-                >
-                  <EditIcon sx={{ fontSize: 16 }} />
-                </Box>
-                <Box
-                  component="span"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onRemoveServer(server.id);
-                  }}
-                  sx={{
-                    p: 0.25,
-                    display: 'inline-flex',
-                    cursor: 'pointer',
-                    borderRadius: '50%',
-                    '&:hover': { bgcolor: 'action.hover' },
-                  }}
-                  title="Remove server"
-                >
-                  <CloseIcon sx={{ fontSize: 16 }} />
-                </Box>
-              </Box>
-            }
-            sx={{ minHeight: 48 }}
-          />
-        ))}
-      </Tabs>
-    </Box>
+            onClick={() => onServerChange(server.id)}
+            className={[
+              'group relative flex items-center gap-1.5 rounded-t-md px-3 py-2 text-xs font-medium transition-colors',
+              active
+                ? 'bg-[var(--background)] text-[var(--text)] after:absolute after:bottom-0 after:left-0 after:right-0 after:h-px after:bg-[var(--background)]'
+                : 'text-[var(--text-secondary)] hover:bg-[var(--surface-2)] hover:text-[var(--text)]',
+            ].join(' ')}
+          >
+            <span className={`size-1.5 rounded-full shrink-0 ${statusDot(server.status)}`} />
+            <span className="max-w-[140px] truncate">{server.name}</span>
+            <span
+              role="button"
+              tabIndex={0}
+              title="Edit server"
+              onClick={(e) => { e.stopPropagation(); onEditServer(server.id); }}
+              onKeyDown={(e) => e.key === 'Enter' && (e.stopPropagation(), onEditServer(server.id))}
+              className="ml-0.5 rounded p-0.5 opacity-0 transition-opacity hover:bg-[var(--surface-2)] group-hover:opacity-60 hover:!opacity-100"
+            >
+              <Pencil size={10} />
+            </span>
+            <span
+              role="button"
+              tabIndex={0}
+              title="Remove server"
+              onClick={(e) => { e.stopPropagation(); onRemoveServer(server.id); }}
+              onKeyDown={(e) => e.key === 'Enter' && (e.stopPropagation(), onRemoveServer(server.id))}
+              className="rounded p-0.5 opacity-0 transition-opacity hover:bg-red-500/20 hover:text-[var(--c-red)] group-hover:opacity-60 hover:!opacity-100"
+            >
+              <X size={10} />
+            </span>
+          </button>
+        );
+      })}
+    </div>
   );
 }

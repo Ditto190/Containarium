@@ -1,28 +1,20 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { Box, Typography, CircularProgress, Alert, IconButton } from '@mui/material';
-import RefreshIcon from '@mui/icons-material/Refresh';
+import { Loader2, RefreshCw } from 'lucide-react';
 import { Server } from '@/src/types/server';
 import { getClient } from '@/src/lib/api/client';
-// Backend health is now displayed natively in the Grafana dashboard via containarium_backend_healthy metric
 
-interface MonitoringViewProps {
-  server: Server;
-}
-
-export default function MonitoringView({ server }: MonitoringViewProps) {
+export default function MonitoringView({ server }: { server: Server }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [grafanaUrl, setGrafanaUrl] = useState<string>('');
+  const [grafanaUrl, setGrafanaUrl] = useState('');
   const [enabled, setEnabled] = useState(false);
 
-  const fetchMonitoringInfo = useCallback(async () => {
+  const fetchInfo = useCallback(async () => {
     try {
-      setLoading(true);
-      setError(null);
-      const client = getClient(server);
-      const info = await client.getMonitoringInfo();
+      setLoading(true); setError(null);
+      const info = await getClient(server).getMonitoringInfo();
       setEnabled(info.enabled);
       setGrafanaUrl(info.grafanaUrl);
     } catch (err) {
@@ -32,70 +24,54 @@ export default function MonitoringView({ server }: MonitoringViewProps) {
     }
   }, [server]);
 
-  useEffect(() => {
-    fetchMonitoringInfo();
-  }, [fetchMonitoringInfo]);
+  useEffect(() => { fetchInfo(); }, [fetchInfo]);
 
   if (loading) {
     return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '60vh' }}>
-        <CircularProgress />
-      </Box>
+      <div className="flex h-60 items-center justify-center">
+        <Loader2 size={24} className="animate-spin text-[var(--text-secondary)]" />
+      </div>
     );
   }
 
   if (error) {
     return (
-      <Box sx={{ p: 3 }}>
-        <Alert severity="error" action={
-          <IconButton color="inherit" size="small" onClick={fetchMonitoringInfo}>
-            <RefreshIcon />
-          </IconButton>
-        }>
-          {error}
-        </Alert>
-      </Box>
+      <div className="p-6">
+        <div className="flex items-center gap-3 rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-[var(--c-red)]">
+          <span className="flex-1">{error}</span>
+          <button onClick={fetchInfo} className="rounded p-1 hover:bg-red-500/20 transition-colors">
+            <RefreshCw size={14} />
+          </button>
+        </div>
+      </div>
     );
   }
 
   if (!enabled || !grafanaUrl) {
     return (
-      <Box sx={{ p: 3, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, mt: 8 }}>
-        <Typography variant="h5" color="text.secondary">
-          Monitoring Not Available
-        </Typography>
-        <Typography color="text.secondary" textAlign="center">
+      <div className="flex flex-col items-center justify-center gap-3 py-24">
+        <p className="text-sm font-medium text-[var(--text-secondary)]">Monitoring Not Available</p>
+        <p className="text-center text-xs text-[var(--text-muted)]">
           Monitoring requires VictoriaMetrics and Grafana to be running.<br />
-          Enable app hosting with <code>--app-hosting</code> to auto-provision the monitoring stack.
-        </Typography>
-      </Box>
+          Enable app hosting with <code className="rounded bg-[var(--surface-2)] px-1">--app-hosting</code> to auto-provision the monitoring stack.
+        </p>
+      </div>
     );
   }
 
-  // Build the full Grafana base URL.
-  // The API returns a relative path like "/grafana" — resolve it against the server endpoint.
   let grafanaBase = grafanaUrl;
   if (grafanaUrl.startsWith('/')) {
-    const serverOrigin = new URL(server.endpoint.startsWith('http') ? server.endpoint : `https://${server.endpoint}`).origin;
-    grafanaBase = `${serverOrigin}${grafanaUrl}`;
+    const origin = new URL(server.endpoint.startsWith('http') ? server.endpoint : `https://${server.endpoint}`).origin;
+    grafanaBase = `${origin}${grafanaUrl}`;
   }
 
-  const iframeSrc = `${grafanaBase}/d/containarium-overview?orgId=1&kiosk&refresh=30s`;
-
   return (
-    <Box sx={{ position: 'relative', height: 'calc(100vh - 150px)' }}>
+    <div className="relative h-[calc(100vh-150px)]">
       <iframe
-        src={iframeSrc}
-        style={{
-          width: '100%',
-          height: '100%',
-          border: 'none',
-          position: 'absolute',
-          top: 0,
-          left: 0,
-        }}
+        src={`${grafanaBase}/d/containarium-overview?orgId=1&kiosk&refresh=30s`}
+        className="absolute inset-0 h-full w-full border-0"
         title="Containarium Monitoring"
       />
-    </Box>
+    </div>
   );
 }

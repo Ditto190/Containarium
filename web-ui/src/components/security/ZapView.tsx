@@ -1,187 +1,97 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import {
-  Box,
-  Typography,
-  CircularProgress,
-  Alert,
-  IconButton,
-  Paper,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Chip,
-  Button,
-  Stack,
-  Collapse,
-  MenuItem,
-  Select,
-  FormControl,
-  InputLabel,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  TextField,
-  LinearProgress,
-  TablePagination,
-} from '@mui/material';
-import RefreshIcon from '@mui/icons-material/Refresh';
-import PlayArrowIcon from '@mui/icons-material/PlayArrow';
-import DownloadIcon from '@mui/icons-material/Download';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import ExpandLessIcon from '@mui/icons-material/ExpandLess';
-import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
-import Tooltip from '@mui/material/Tooltip';
-import Snackbar from '@mui/material/Snackbar';
+import { useState, useEffect, useCallback } from 'react';
+import { Play, RefreshCw, Download, ChevronDown, ChevronUp, EyeOff, Loader2 } from 'lucide-react';
 import { Server } from '@/src/types/server';
 import { ZapAlert, ZapAlertSummary, ZapScanRun, ZapConfig } from '@/src/types/security';
 import { getClient } from '@/src/lib/api/client';
+import { Modal, ModalBtn, Textarea, FormField } from '@/src/components/ui/Modal';
 
-interface ZapViewProps {
-  server: Server;
-}
+interface ZapViewProps { server: Server; }
 
 function formatDate(iso: string): string {
   if (!iso) return '-';
-  try {
-    return new Date(iso).toLocaleString();
-  } catch {
-    return iso;
-  }
+  try { return new Date(iso).toLocaleString(); } catch { return iso; }
 }
 
-function RiskChip({ risk }: { risk: string }) {
-  const colorMap: Record<string, 'error' | 'warning' | 'info' | 'default'> = {
-    high: 'error',
-    medium: 'warning',
-    low: 'info',
-    informational: 'default',
+function RiskBadge({ risk }: { risk: string }) {
+  const cls: Record<string, string> = {
+    high:          'border-red-500/30 bg-red-500/10 text-[var(--c-red)]',
+    medium:        'border-amber-500/30 bg-amber-500/10 text-[var(--c-amber)]',
+    low:           'border-blue-500/30 bg-blue-500/10 text-[var(--c-blue)]',
+    informational: 'border-[var(--border-subtle)] bg-[var(--surface-2)] text-[var(--text-muted)]',
   };
-  return (
-    <Chip
-      label={risk}
-      color={colorMap[risk] || 'default'}
-      size="small"
-      sx={risk === 'high' ? { fontWeight: 'bold' } : undefined}
-    />
-  );
+  return <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${cls[risk] || cls.informational} ${risk === 'high' ? 'font-bold' : ''}`}>{risk}</span>;
 }
 
-function StatusChip({ status }: { status: string }) {
+function StatusBadge({ status }: { status: string }) {
   switch (status) {
-    case 'open':
-      return <Chip label="Open" color="error" size="small" variant="outlined" />;
-    case 'resolved':
-      return <Chip label="Resolved" color="success" size="small" variant="outlined" />;
-    case 'suppressed':
-      return <Chip label="Suppressed" size="small" variant="outlined" />;
-    default:
-      return <Chip label={status} size="small" />;
+    case 'open': return <span className="rounded-full border border-red-500/30 bg-red-500/10 px-2 py-0.5 text-[10px] text-[var(--c-red)]">Open</span>;
+    case 'resolved': return <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-[var(--c-emerald)]">Resolved</span>;
+    case 'suppressed': return <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--surface-2)] px-2 py-0.5 text-[10px] text-[var(--text-muted)]">Suppressed</span>;
+    default: return <span className="rounded-full border border-[var(--border-subtle)] px-2 py-0.5 text-[10px] text-[var(--text-muted)]">{status}</span>;
   }
 }
 
 function SummaryCard({ title, value, color }: { title: string; value: number; color: string }) {
   return (
-    <Paper sx={{ p: 2, textAlign: 'center', minWidth: 110 }}>
-      <Typography variant="h4" sx={{ color, fontWeight: 'bold' }}>
-        {value}
-      </Typography>
-      <Typography variant="body2" color="text.secondary">
-        {title}
-      </Typography>
-    </Paper>
+    <div className="flex min-w-[100px] flex-col items-center rounded-xl border border-[var(--border-subtle)] bg-[var(--surface)] p-3">
+      <span className={`text-2xl font-bold ${color}`}>{value}</span>
+      <span className="text-[10px] text-[var(--text-muted)]">{title}</span>
+    </div>
   );
 }
 
 function AlertRow({ alert, onSuppress }: { alert: ZapAlert; onSuppress: (id: number) => void }) {
   const [expanded, setExpanded] = useState(false);
+  const TD = 'px-3 py-2 text-xs';
 
   return (
     <>
-      <TableRow hover sx={{ cursor: 'pointer' }} onClick={() => setExpanded(!expanded)}>
-        <TableCell>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-            {expanded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
-            <RiskChip risk={alert.risk} />
-          </Box>
-        </TableCell>
-        <TableCell>
-          <Typography variant="body2" sx={{ fontWeight: 500 }}>{alert.alertName}</Typography>
-        </TableCell>
-        <TableCell>
-          <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.8rem', maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {alert.url}
-          </Typography>
-        </TableCell>
-        <TableCell>
-          <Chip label={alert.confidence} size="small" variant="outlined" />
-        </TableCell>
-        <TableCell><StatusChip status={alert.status} /></TableCell>
-        <TableCell>{formatDate(alert.lastSeenAt)}</TableCell>
-        <TableCell align="right">
+      <tr onClick={() => setExpanded(!expanded)} className="cursor-pointer border-b border-[var(--border-subtle)] transition-colors hover:bg-[var(--surface)] last:border-0">
+        <td className={TD}>
+          <div className="flex items-center gap-1">
+            {expanded ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+            <RiskBadge risk={alert.risk} />
+          </div>
+        </td>
+        <td className={TD + ' font-medium text-[var(--text)]'}>{alert.alertName}</td>
+        <td className={TD}><span className="block max-w-[280px] truncate font-mono text-[10px] text-[var(--text-secondary)]" title={alert.url}>{alert.url}</span></td>
+        <td className={TD}><span className="rounded-full border border-[var(--border-subtle)] bg-[var(--surface-2)] px-2 py-0.5 text-[10px] text-[var(--text-muted)]">{alert.confidence}</span></td>
+        <td className={TD}><StatusBadge status={alert.status} /></td>
+        <td className={TD + ' whitespace-nowrap text-[var(--text-muted)]'}>{formatDate(alert.lastSeenAt)}</td>
+        <td className="px-3 py-2 text-right">
           {alert.status === 'open' && (
-            <Tooltip title="Suppress alert">
-              <IconButton size="small" onClick={(e) => { e.stopPropagation(); onSuppress(alert.id); }}>
-                <VisibilityOffIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
+            <button title="Suppress alert" onClick={e => { e.stopPropagation(); onSuppress(alert.id); }}
+              className="rounded p-1 text-[var(--text-muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"><EyeOff size={12} /></button>
           )}
-        </TableCell>
-      </TableRow>
-      <TableRow>
-        <TableCell colSpan={7} sx={{ py: 0, borderBottom: expanded ? undefined : 'none' }}>
-          <Collapse in={expanded} timeout="auto" unmountOnExit>
-            <Box sx={{ py: 2, pl: 4 }}>
-              <Stack spacing={1}>
-                {alert.description && (
-                  <Box>
-                    <Typography variant="caption" color="text.secondary">Description</Typography>
-                    <Typography variant="body2">{alert.description}</Typography>
-                  </Box>
-                )}
-                {alert.evidence && (
-                  <Box>
-                    <Typography variant="caption" color="text.secondary">Evidence</Typography>
-                    <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.8rem', bgcolor: 'grey.100', p: 1, borderRadius: 1, whiteSpace: 'pre-wrap' }}>
-                      {alert.evidence}
-                    </Typography>
-                  </Box>
-                )}
-                {alert.solution && (
-                  <Box>
-                    <Typography variant="caption" color="text.secondary">Solution</Typography>
-                    <Typography variant="body2">{alert.solution}</Typography>
-                  </Box>
-                )}
-                {alert.cweIds && (
-                  <Box>
-                    <Typography variant="caption" color="text.secondary">CWE IDs</Typography>
-                    <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>{alert.cweIds}</Typography>
-                  </Box>
-                )}
-                {alert.references && (
-                  <Box>
-                    <Typography variant="caption" color="text.secondary">References</Typography>
-                    <Typography variant="body2" sx={{ fontSize: '0.8rem', whiteSpace: 'pre-wrap' }}>{alert.references}</Typography>
-                  </Box>
-                )}
-                <Stack direction="row" spacing={2}>
-                  <Typography variant="caption" color="text.secondary">Method: {alert.method || 'GET'}</Typography>
-                  <Typography variant="caption" color="text.secondary">Plugin: {alert.pluginId}</Typography>
-                  <Typography variant="caption" color="text.secondary">First seen: {formatDate(alert.firstSeenAt)}</Typography>
-                  <Typography variant="caption" color="text.secondary">Last seen: {formatDate(alert.lastSeenAt)}</Typography>
-                  {alert.resolvedAt && <Typography variant="caption" color="text.secondary">Resolved: {formatDate(alert.resolvedAt)}</Typography>}
-                </Stack>
-              </Stack>
-            </Box>
-          </Collapse>
-        </TableCell>
-      </TableRow>
+        </td>
+      </tr>
+      {expanded && (
+        <tr className="border-b border-[var(--border-subtle)]">
+          <td colSpan={7} className="bg-[var(--surface-2)] px-8 py-3">
+            <div className="flex flex-col gap-2 text-xs">
+              {alert.description && <div><p className="mb-0.5 text-[10px] text-[var(--text-muted)]">Description</p><p className="text-[var(--text)]">{alert.description}</p></div>}
+              {alert.evidence && (
+                <div>
+                  <p className="mb-0.5 text-[10px] text-[var(--text-muted)]">Evidence</p>
+                  <pre className="overflow-x-auto rounded border border-[var(--border-subtle)] bg-[var(--surface)] p-2 font-mono text-[10px] text-[var(--text)] whitespace-pre-wrap">{alert.evidence}</pre>
+                </div>
+              )}
+              {alert.solution && <div><p className="mb-0.5 text-[10px] text-[var(--text-muted)]">Solution</p><p className="text-[var(--text)]">{alert.solution}</p></div>}
+              {alert.cweIds && <div><p className="mb-0.5 text-[10px] text-[var(--text-muted)]">CWE IDs</p><code className="font-mono text-[var(--text-secondary)]">{alert.cweIds}</code></div>}
+              {alert.references && <div><p className="mb-0.5 text-[10px] text-[var(--text-muted)]">References</p><p className="text-[10px] text-[var(--text-secondary)] whitespace-pre-wrap">{alert.references}</p></div>}
+              <div className="flex flex-wrap gap-4 text-[10px] text-[var(--text-muted)]">
+                <span>Method: {alert.method || 'GET'}</span>
+                <span>Plugin: {alert.pluginId}</span>
+                <span>First seen: {formatDate(alert.firstSeenAt)}</span>
+                <span>Last seen: {formatDate(alert.lastSeenAt)}</span>
+                {alert.resolvedAt && <span>Resolved: {formatDate(alert.resolvedAt)}</span>}
+              </div>
+            </div>
+          </td>
+        </tr>
+      )}
     </>
   );
 }
@@ -196,64 +106,39 @@ export default function ZapView({ server }: ZapViewProps) {
   const [error, setError] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [snackMessage, setSnackMessage] = useState<string | null>(null);
-
-  // Filters
   const [riskFilter, setRiskFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('open');
-
-  // Pagination
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(25);
-
-  // Suppress dialog
   const [suppressId, setSuppressId] = useState<number | null>(null);
   const [suppressReason, setSuppressReason] = useState('');
-
-  // Show scan history
   const [showScanHistory, setShowScanHistory] = useState(false);
-
-  // Download state
   const [downloadFormat, setDownloadFormat] = useState<'csv' | 'json'>('csv');
   const [downloading, setDownloading] = useState(false);
-
-  // Install state
   const [installing, setInstalling] = useState(false);
+
+  useEffect(() => {
+    if (snackMessage) { const t = setTimeout(() => setSnackMessage(null), 5000); return () => clearTimeout(t); }
+  }, [snackMessage]);
 
   const loadData = useCallback(async () => {
     try {
       const client = getClient(server);
       const limit = rowsPerPage === -1 ? 1000 : rowsPerPage;
       const offset = rowsPerPage === -1 ? 0 : page * rowsPerPage;
-
       const [summaryResp, alertsResp, runsResp, configResp] = await Promise.all([
         client.getZapAlertSummary(),
-        client.listZapAlerts({
-          risk: riskFilter || undefined,
-          status: statusFilter || undefined,
-          limit,
-          offset,
-        }),
+        client.listZapAlerts({ risk: riskFilter || undefined, status: statusFilter || undefined, limit, offset }),
         client.listZapScanRuns(10),
         client.getZapConfig(),
       ]);
-      setSummary(summaryResp.summary);
-      setAlerts(alertsResp.alerts);
-      setTotalCount(alertsResp.totalCount);
-      setScanRuns(runsResp.scanRuns);
-      setConfig(configResp.config);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load ZAP data');
-    } finally {
-      setIsLoading(false);
-    }
+      setSummary(summaryResp.summary); setAlerts(alertsResp.alerts); setTotalCount(alertsResp.totalCount);
+      setScanRuns(runsResp.scanRuns); setConfig(configResp.config); setError(null);
+    } catch (err) { setError(err instanceof Error ? err.message : 'Failed to load ZAP data'); }
+    finally { setIsLoading(false); }
   }, [server, riskFilter, statusFilter, page, rowsPerPage]);
 
-  useEffect(() => {
-    loadData();
-    const interval = setInterval(loadData, 60000);
-    return () => clearInterval(interval);
-  }, [loadData]);
+  useEffect(() => { loadData(); const interval = setInterval(loadData, 60000); return () => clearInterval(interval); }, [loadData]);
 
   const handleTriggerScan = async () => {
     setScanning(true);
@@ -266,21 +151,11 @@ export default function ZapView({ server }: ZapViewProps) {
           const runsResp = await client.listZapScanRuns(5);
           setScanRuns(runsResp.scanRuns);
           const latest = runsResp.scanRuns[0];
-          if (latest && latest.id === result.scanRunId && latest.status !== 'running') {
-            clearInterval(pollInterval);
-            setScanning(false);
-            loadData();
-          }
-        } catch {
-          // ignore polling errors
-        }
-      }, 10000); // ZAP scans are slow, poll every 10s
-      // Safety: stop polling after 30 minutes
+          if (latest && latest.id === result.scanRunId && latest.status !== 'running') { clearInterval(pollInterval); setScanning(false); loadData(); }
+        } catch { /* ignore */ }
+      }, 10000);
       setTimeout(() => { clearInterval(pollInterval); setScanning(false); }, 1800000);
-    } catch (err) {
-      setSnackMessage(err instanceof Error ? err.message : 'Scan trigger failed');
-      setScanning(false);
-    }
+    } catch (err) { setSnackMessage(err instanceof Error ? err.message : 'Scan trigger failed'); setScanning(false); }
   };
 
   const handleSuppress = async () => {
@@ -288,60 +163,30 @@ export default function ZapView({ server }: ZapViewProps) {
     try {
       const client = getClient(server);
       await client.suppressZapAlert(suppressId, suppressReason);
-      setSnackMessage('Alert suppressed');
-      setSuppressId(null);
-      setSuppressReason('');
-      loadData();
-    } catch (err) {
-      setSnackMessage(err instanceof Error ? err.message : 'Failed to suppress alert');
-    }
+      setSnackMessage('Alert suppressed'); setSuppressId(null); setSuppressReason(''); loadData();
+    } catch (err) { setSnackMessage(err instanceof Error ? err.message : 'Failed to suppress alert'); }
   };
 
   const handleDownload = async () => {
     setDownloading(true);
     try {
       const client = getClient(server);
-      const resp = await client.listZapAlerts({
-        risk: riskFilter || undefined,
-        status: statusFilter || undefined,
-        limit: 1000,
-        offset: 0,
-      });
-      const allAlerts = resp.alerts;
+      const resp = await client.listZapAlerts({ risk: riskFilter || undefined, status: statusFilter || undefined, limit: 1000, offset: 0 });
+      const all = resp.alerts;
       const dateStr = new Date().toISOString().slice(0, 10);
-      let blob: Blob;
-      let filename: string;
-
+      let blob: Blob; let filename: string;
       if (downloadFormat === 'json') {
-        blob = new Blob([JSON.stringify(allAlerts, null, 2)], { type: 'application/json' });
-        filename = `zap-alerts-${dateStr}.json`;
+        blob = new Blob([JSON.stringify(all, null, 2)], { type: 'application/json' }); filename = `zap-alerts-${dateStr}.json`;
       } else {
-        const columns = ['id', 'risk', 'confidence', 'alertName', 'description', 'url', 'method', 'evidence', 'solution', 'cweIds', 'status', 'firstSeenAt', 'lastSeenAt', 'resolvedAt', 'suppressed', 'suppressedReason'] as const;
-        const escape = (v: unknown) => {
-          const s = String(v ?? '');
-          return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
-        };
-        const rows = [columns.join(',')];
-        for (const a of allAlerts) {
-          rows.push(columns.map((col) => escape(a[col])).join(','));
-        }
-        blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+        const cols = ['id', 'risk', 'confidence', 'alertName', 'description', 'url', 'method', 'evidence', 'solution', 'cweIds', 'status', 'firstSeenAt', 'lastSeenAt', 'resolvedAt', 'suppressed', 'suppressedReason'] as const;
+        const esc = (v: unknown) => { const s = String(v ?? ''); return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s; };
+        blob = new Blob([[cols.join(','), ...all.map(a => cols.map(c => esc(a[c])).join(','))].join('\n')], { type: 'text/csv' });
         filename = `zap-alerts-${dateStr}.csv`;
       }
-
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      setSnackMessage(err instanceof Error ? err.message : 'Download failed');
-    } finally {
-      setDownloading(false);
-    }
+      const url = URL.createObjectURL(blob); const a = document.createElement('a');
+      a.href = url; a.download = filename; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+    } catch (err) { setSnackMessage(err instanceof Error ? err.message : 'Download failed'); }
+    finally { setDownloading(false); }
   };
 
   const handleDownloadReport = async (scanRunId: string) => {
@@ -349,17 +194,10 @@ export default function ZapView({ server }: ZapViewProps) {
       const client = getClient(server);
       const report = await client.getZapReport(scanRunId, 'html');
       const blob = new Blob([report.content], { type: report.contentType || 'text/html' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = report.filename || `zap-report-${scanRunId}.html`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      setSnackMessage(err instanceof Error ? err.message : 'Failed to download report');
-    }
+      const url = URL.createObjectURL(blob); const a = document.createElement('a');
+      a.href = url; a.download = report.filename || `zap-report-${scanRunId}.html`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+    } catch (err) { setSnackMessage(err instanceof Error ? err.message : 'Failed to download report'); }
   };
 
   const handleInstallZap = async () => {
@@ -368,286 +206,199 @@ export default function ZapView({ server }: ZapViewProps) {
       const client = getClient(server);
       const result = await client.installZap();
       setSnackMessage(result.message || 'ZAP installed');
-      if (result.success) {
-        loadData();
-      }
-    } catch (err) {
-      setSnackMessage(err instanceof Error ? err.message : 'Failed to install ZAP');
-    } finally {
-      setInstalling(false);
-    }
+      if (result.success) loadData();
+    } catch (err) { setSnackMessage(err instanceof Error ? err.message : 'Failed to install ZAP'); }
+    finally { setInstalling(false); }
   };
 
-  if (isLoading) {
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '40vh' }}>
-        <CircularProgress />
-      </Box>
-    );
-  }
+  const selectCls = 'appearance-none rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] px-3 py-1.5 text-xs text-[var(--text)] focus:border-[var(--accent)] focus:outline-none';
+  const totalPages = Math.ceil(totalCount / rowsPerPage);
 
-  if (error) {
-    return (
-      <Box sx={{ p: 3 }}>
-        <Alert severity="error" action={
-          <IconButton color="inherit" size="small" onClick={loadData}><RefreshIcon /></IconButton>
-        }>
-          {error}
-        </Alert>
-      </Box>
-    );
-  }
+  if (isLoading) return <div className="flex justify-center py-16"><Loader2 size={20} className="animate-spin text-[var(--text-secondary)]" /></div>;
+  if (error) return (
+    <div className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-[var(--c-red)]">
+      {error}
+      <button onClick={loadData} className="ml-auto rounded p-1 hover:bg-red-500/20"><RefreshCw size={12} /></button>
+    </div>
+  );
 
   return (
-    <Box>
+    <div className="flex flex-col gap-4">
       {/* Header */}
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
-        <Box>
-          <Typography variant="h6">OWASP ZAP Web Application Scan</Typography>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-[var(--text)]">OWASP ZAP Web Application Scan</h2>
           {config && (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-              <Typography variant="caption" color="text.secondary">
-                Interval: {config.interval}
-                {config.zapAvailable && config.zapVersion && ` | ZAP: ${config.zapVersion}`}
-                {config.zapAvailable && !config.zapVersion && ' | ZAP: installed'}
-              </Typography>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              <span className="text-[10px] text-[var(--text-muted)]">
+                Interval: {config.interval}{config.zapAvailable && config.zapVersion && ` | ZAP: ${config.zapVersion}`}{config.zapAvailable && !config.zapVersion && ' | ZAP: installed'}
+              </span>
               {!config.zapAvailable && (
-                <Button
-                  size="small"
-                  variant="outlined"
-                  startIcon={installing ? <CircularProgress size={14} /> : <DownloadIcon />}
-                  onClick={handleInstallZap}
-                  disabled={installing}
-                  sx={{ textTransform: 'none', fontSize: '0.7rem', py: 0 }}
-                >
-                  Install ZAP
-                </Button>
+                <button onClick={handleInstallZap} disabled={installing}
+                  className="flex items-center gap-1 rounded border border-[var(--border-subtle)] px-2 py-0.5 text-[10px] text-[var(--text-secondary)] hover:bg-[var(--surface-2)] disabled:opacity-50">
+                  {installing ? <Loader2 size={10} className="animate-spin" /> : <Download size={10} />} Install ZAP
+                </button>
               )}
-            </Box>
+            </div>
           )}
-        </Box>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Button
-            variant="contained"
-            size="small"
-            startIcon={scanning ? <CircularProgress size={16} color="inherit" /> : <PlayArrowIcon />}
-            onClick={handleTriggerScan}
-            disabled={scanning || (config !== null && !config.zapAvailable)}
-          >
-            Run Scan
-          </Button>
-          <IconButton onClick={loadData} size="small"><RefreshIcon /></IconButton>
-        </Box>
-      </Box>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={handleTriggerScan} disabled={scanning || (config !== null && !config.zapAvailable)}
+            className="flex items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 py-1.5 text-xs text-white hover:bg-[var(--accent-hover)] disabled:opacity-50">
+            {scanning ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />} Run Scan
+          </button>
+          <button onClick={loadData} className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface)] p-1.5 text-[var(--text-muted)] hover:bg-[var(--surface-2)]"><RefreshCw size={12} /></button>
+        </div>
+      </div>
 
       {/* Scan Progress */}
       {scanRuns.length > 0 && scanRuns[0].status === 'running' && (
-        <Box sx={{ mb: 3 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
-            <Typography variant="body2" color="text.secondary">
-              Scanning... {scanRuns[0].completedCount}/{scanRuns[0].targetsCount} targets
-            </Typography>
-          </Box>
-          <LinearProgress
-            variant="determinate"
-            value={scanRuns[0].targetsCount > 0 ? (scanRuns[0].completedCount / scanRuns[0].targetsCount) * 100 : 0}
-          />
-        </Box>
+        <div>
+          <p className="mb-1 text-xs text-[var(--text-muted)]">Scanning... {scanRuns[0].completedCount}/{scanRuns[0].targetsCount} targets</p>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--surface-2)]">
+            <div className="h-1.5 rounded-full bg-[var(--accent)]" style={{ width: `${scanRuns[0].targetsCount > 0 ? (scanRuns[0].completedCount / scanRuns[0].targetsCount) * 100 : 0}%` }} />
+          </div>
+        </div>
       )}
 
       {/* Summary Cards */}
       {summary && (
-        <Stack direction="row" spacing={2} sx={{ mb: 3, flexWrap: 'wrap' }}>
-          <SummaryCard title="Open" value={summary.openAlerts} color="error.main" />
-          <SummaryCard title="High" value={summary.highCount} color="#d32f2f" />
-          <SummaryCard title="Medium" value={summary.mediumCount} color="warning.main" />
-          <SummaryCard title="Low" value={summary.lowCount} color="info.main" />
-          <SummaryCard title="Info" value={summary.infoCount} color="text.secondary" />
-          <SummaryCard title="Resolved" value={summary.resolvedAlerts} color="success.main" />
-          <SummaryCard title="Suppressed" value={summary.suppressedAlerts} color="text.disabled" />
-        </Stack>
+        <div className="flex flex-wrap gap-2">
+          <SummaryCard title="Open" value={summary.openAlerts} color="text-[var(--c-red)]" />
+          <SummaryCard title="High" value={summary.highCount} color="text-red-500" />
+          <SummaryCard title="Medium" value={summary.mediumCount} color="text-[var(--c-amber)]" />
+          <SummaryCard title="Low" value={summary.lowCount} color="text-[var(--c-blue)]" />
+          <SummaryCard title="Info" value={summary.infoCount} color="text-[var(--text-muted)]" />
+          <SummaryCard title="Resolved" value={summary.resolvedAlerts} color="text-[var(--c-emerald)]" />
+          <SummaryCard title="Suppressed" value={summary.suppressedAlerts} color="text-[var(--text-muted)]" />
+        </div>
       )}
 
       {/* Filters */}
-      <Paper sx={{ p: 2, mb: 3 }}>
-        <Stack direction="row" spacing={2} alignItems="center">
-          <FormControl size="small" sx={{ minWidth: 140 }}>
-            <InputLabel>Risk Level</InputLabel>
-            <Select value={riskFilter} label="Risk Level" onChange={(e) => { setRiskFilter(e.target.value); setPage(0); }}>
-              <MenuItem value="">All</MenuItem>
-              <MenuItem value="high">High</MenuItem>
-              <MenuItem value="medium">Medium</MenuItem>
-              <MenuItem value="low">Low</MenuItem>
-              <MenuItem value="informational">Informational</MenuItem>
-            </Select>
-          </FormControl>
-          <FormControl size="small" sx={{ minWidth: 120 }}>
-            <InputLabel>Status</InputLabel>
-            <Select value={statusFilter} label="Status" onChange={(e) => { setStatusFilter(e.target.value); setPage(0); }}>
-              <MenuItem value="">All</MenuItem>
-              <MenuItem value="open">Open</MenuItem>
-              <MenuItem value="resolved">Resolved</MenuItem>
-              <MenuItem value="suppressed">Suppressed</MenuItem>
-            </Select>
-          </FormControl>
-          <Typography variant="body2" color="text.secondary">
-            {totalCount} alerts
-          </Typography>
-          <Box sx={{ ml: 'auto', display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Select
-              size="small"
-              value={downloadFormat}
-              onChange={(e) => setDownloadFormat(e.target.value as 'csv' | 'json')}
-              sx={{ minWidth: 80, height: 32 }}
-            >
-              <MenuItem value="csv">CSV</MenuItem>
-              <MenuItem value="json">JSON</MenuItem>
-            </Select>
-            <Button
-              size="small"
-              variant="outlined"
-              startIcon={downloading ? <CircularProgress size={14} /> : <DownloadIcon />}
-              onClick={handleDownload}
-              disabled={downloading || totalCount === 0}
-            >
-              Download
-            </Button>
-          </Box>
-        </Stack>
-      </Paper>
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--surface)] p-4">
+        <select value={riskFilter} onChange={e => { setRiskFilter(e.target.value); setPage(0); }} className={selectCls}>
+          <option value="">All Risk Levels</option>
+          <option value="high">High</option>
+          <option value="medium">Medium</option>
+          <option value="low">Low</option>
+          <option value="informational">Informational</option>
+        </select>
+        <select value={statusFilter} onChange={e => { setStatusFilter(e.target.value); setPage(0); }} className={selectCls}>
+          <option value="">All Statuses</option>
+          <option value="open">Open</option>
+          <option value="resolved">Resolved</option>
+          <option value="suppressed">Suppressed</option>
+        </select>
+        <span className="text-xs text-[var(--text-muted)]">{totalCount} alerts</span>
+        <div className="ml-auto flex items-center gap-2">
+          <select value={downloadFormat} onChange={e => setDownloadFormat(e.target.value as 'csv' | 'json')} className={selectCls} style={{ width: 70 }}>
+            <option value="csv">CSV</option>
+            <option value="json">JSON</option>
+          </select>
+          <button onClick={handleDownload} disabled={downloading || totalCount === 0}
+            className="flex items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--surface)] px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-2)] disabled:opacity-50">
+            {downloading ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />} Download
+          </button>
+        </div>
+      </div>
 
       {/* Alerts Table */}
-      <TableContainer component={Paper} sx={{ mb: 3 }}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell sx={{ width: 100 }}>Risk</TableCell>
-              <TableCell>Alert</TableCell>
-              <TableCell>URL</TableCell>
-              <TableCell sx={{ width: 100 }}>Confidence</TableCell>
-              <TableCell sx={{ width: 100 }}>Status</TableCell>
-              <TableCell sx={{ width: 160 }}>Last Seen</TableCell>
-              <TableCell align="right" sx={{ width: 60 }}>Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {alerts.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={7} align="center">
-                  <Typography color="text.secondary" sx={{ py: 4 }}>
-                    {statusFilter === 'open' ? 'No open ZAP alerts.' : 'No alerts match the current filters.'}
-                  </Typography>
-                </TableCell>
-              </TableRow>
-            ) : (
-              alerts.map((alert) => (
-                <AlertRow key={alert.id} alert={alert} onSuppress={(id) => setSuppressId(id)} />
-              ))
-            )}
-          </TableBody>
-        </Table>
-        {totalCount > 0 && (
-          <TablePagination
-            component="div"
-            count={totalCount}
-            page={page}
-            onPageChange={(_, newPage) => setPage(newPage)}
-            rowsPerPage={rowsPerPage}
-            onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
-            rowsPerPageOptions={[10, 25, 50, 100]}
-          />
-        )}
-      </TableContainer>
-
-      {/* Scan History Toggle */}
-      <Button
-        size="small"
-        variant="text"
-        onClick={() => setShowScanHistory(!showScanHistory)}
-        startIcon={showScanHistory ? <ExpandLessIcon /> : <ExpandMoreIcon />}
-        sx={{ mb: 1 }}
-      >
-        Scan History ({scanRuns.length})
-      </Button>
-
-      <Collapse in={showScanHistory}>
-        <TableContainer component={Paper}>
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell>Started</TableCell>
-                <TableCell>Trigger</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell>Targets</TableCell>
-                <TableCell>High</TableCell>
-                <TableCell>Medium</TableCell>
-                <TableCell>Low</TableCell>
-                <TableCell>Duration</TableCell>
-                <TableCell align="right">Report</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {scanRuns.map((run) => (
-                <TableRow key={run.id}>
-                  <TableCell>{formatDate(run.startedAt)}</TableCell>
-                  <TableCell><Chip label={run.trigger} size="small" variant="outlined" /></TableCell>
-                  <TableCell>
-                    <Chip
-                      label={run.status}
-                      size="small"
-                      color={run.status === 'completed' ? 'success' : run.status === 'failed' ? 'error' : 'info'}
-                    />
-                  </TableCell>
-                  <TableCell>{run.targetsCount}</TableCell>
-                  <TableCell>{run.highCount > 0 ? <Typography color="error" variant="body2" fontWeight="bold">{run.highCount}</Typography> : '-'}</TableCell>
-                  <TableCell>{run.mediumCount > 0 ? <Typography color="warning.main" variant="body2">{run.mediumCount}</Typography> : '-'}</TableCell>
-                  <TableCell>{run.lowCount > 0 ? run.lowCount : '-'}</TableCell>
-                  <TableCell>{run.duration || '-'}</TableCell>
-                  <TableCell align="right">
-                    {run.status === 'completed' && (
-                      <Tooltip title="Download HTML report">
-                        <IconButton size="small" onClick={() => handleDownloadReport(run.id)}>
-                          <DownloadIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                    )}
-                  </TableCell>
-                </TableRow>
+      <div className="overflow-x-auto rounded-xl border border-[var(--border-subtle)]">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-[var(--border-subtle)] bg-[var(--surface)]">
+              {['Risk', 'Alert', 'URL', 'Confidence', 'Status', 'Last Seen', ''].map(h => (
+                <th key={h} className="px-3 py-2.5 text-left text-xs font-medium text-[var(--text-secondary)] whitespace-nowrap">{h}</th>
               ))}
-            </TableBody>
-          </Table>
-        </TableContainer>
-      </Collapse>
+            </tr>
+          </thead>
+          <tbody>
+            {alerts.length === 0 ? (
+              <tr><td colSpan={7} className="py-10 text-center text-[var(--text-muted)]">
+                {statusFilter === 'open' ? 'No open ZAP alerts.' : 'No alerts match the current filters.'}
+              </td></tr>
+            ) : (
+              alerts.map(alert => <AlertRow key={alert.id} alert={alert} onSuppress={id => setSuppressId(id)} />)
+            )}
+          </tbody>
+        </table>
+        {totalCount > 0 && (
+          <div className="flex items-center justify-between border-t border-[var(--border-subtle)] px-4 py-2 text-xs text-[var(--text-muted)]">
+            <div className="flex items-center gap-2">
+              <span>Rows:</span>
+              <select value={rowsPerPage} onChange={e => { setRowsPerPage(parseInt(e.target.value)); setPage(0); }}
+                className="rounded border border-[var(--border-subtle)] bg-[var(--surface-2)] px-2 py-0.5 text-xs text-[var(--text)] focus:outline-none">
+                {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              <span>{page * rowsPerPage + 1}–{Math.min((page + 1) * rowsPerPage, totalCount)} of {totalCount}</span>
+              <button onClick={() => setPage(page - 1)} disabled={page === 0} className="rounded px-2 py-1 hover:bg-[var(--surface-2)] disabled:opacity-40">‹</button>
+              <button onClick={() => setPage(page + 1)} disabled={page >= totalPages - 1} className="rounded px-2 py-1 hover:bg-[var(--surface-2)] disabled:opacity-40">›</button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Scan History */}
+      <button onClick={() => setShowScanHistory(!showScanHistory)} className="flex items-center gap-1.5 text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)]">
+        {showScanHistory ? <ChevronUp size={12} /> : <ChevronDown size={12} />} Scan History ({scanRuns.length})
+      </button>
+      {showScanHistory && (
+        <div className="overflow-x-auto rounded-xl border border-[var(--border-subtle)]">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-[var(--border-subtle)] bg-[var(--surface)]">
+                {['Started', 'Trigger', 'Status', 'Targets', 'High', 'Medium', 'Low', 'Duration', ''].map(h => (
+                  <th key={h} className="px-3 py-2.5 text-left text-xs font-medium text-[var(--text-secondary)] whitespace-nowrap">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {scanRuns.map(run => (
+                <tr key={run.id} className="border-b border-[var(--border-subtle)] transition-colors hover:bg-[var(--surface)] last:border-0">
+                  <td className="px-3 py-2 text-xs text-[var(--text-muted)] whitespace-nowrap">{formatDate(run.startedAt)}</td>
+                  <td className="px-3 py-2 text-xs"><span className="rounded-full border border-[var(--border-subtle)] bg-[var(--surface-2)] px-2 py-0.5 text-[10px] text-[var(--text-muted)]">{run.trigger}</span></td>
+                  <td className="px-3 py-2 text-xs">
+                    <span className={`rounded-full border px-2 py-0.5 text-[10px] ${run.status === 'completed' ? 'border-emerald-500/30 bg-emerald-500/10 text-[var(--c-emerald)]' : run.status === 'failed' ? 'border-red-500/30 bg-red-500/10 text-[var(--c-red)]' : 'border-blue-500/30 bg-blue-500/10 text-[var(--c-blue)]'}`}>{run.status}</span>
+                  </td>
+                  <td className="px-3 py-2 text-xs text-[var(--text-secondary)]">{run.targetsCount}</td>
+                  <td className="px-3 py-2 text-xs">{run.highCount > 0 ? <span className="font-bold text-[var(--c-red)]">{run.highCount}</span> : <span className="text-[var(--text-muted)]">-</span>}</td>
+                  <td className="px-3 py-2 text-xs">{run.mediumCount > 0 ? <span className="text-[var(--c-amber)]">{run.mediumCount}</span> : <span className="text-[var(--text-muted)]">-</span>}</td>
+                  <td className="px-3 py-2 text-xs">{run.lowCount > 0 ? run.lowCount : <span className="text-[var(--text-muted)]">-</span>}</td>
+                  <td className="px-3 py-2 text-xs text-[var(--text-muted)]">{run.duration || '-'}</td>
+                  <td className="px-3 py-2 text-right">
+                    {run.status === 'completed' && (
+                      <button title="Download HTML report" onClick={() => handleDownloadReport(run.id)}
+                        className="rounded p-1 text-[var(--text-muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text)]"><Download size={12} /></button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* Suppress Dialog */}
-      <Dialog open={suppressId !== null} onClose={() => setSuppressId(null)}>
-        <DialogTitle>Suppress ZAP Alert</DialogTitle>
-        <DialogContent>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Suppressed alerts are excluded from open counts and alerts.
-          </Typography>
-          <TextField
-            label="Reason"
-            fullWidth
-            multiline
-            rows={2}
-            value={suppressReason}
-            onChange={(e) => setSuppressReason(e.target.value)}
-            placeholder="e.g., Accepted risk, false positive, handled externally"
-          />
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setSuppressId(null)}>Cancel</Button>
-          <Button onClick={handleSuppress} variant="contained">Suppress</Button>
-        </DialogActions>
-      </Dialog>
+      <Modal open={suppressId !== null} onClose={() => { setSuppressId(null); setSuppressReason(''); }} title="Suppress ZAP Alert" size="sm"
+        footer={
+          <>
+            <ModalBtn onClick={() => { setSuppressId(null); setSuppressReason(''); }}>Cancel</ModalBtn>
+            <ModalBtn variant="primary" onClick={handleSuppress}>Suppress</ModalBtn>
+          </>
+        }>
+        <p className="mb-3 text-xs text-[var(--text-muted)]">Suppressed alerts are excluded from open counts and alerts.</p>
+        <FormField label="Reason">
+          <Textarea value={suppressReason} onChange={e => setSuppressReason(e.target.value)} placeholder="e.g., Accepted risk, false positive, handled externally" rows={2} />
+        </FormField>
+      </Modal>
 
-      <Snackbar
-        open={!!snackMessage}
-        autoHideDuration={5000}
-        onClose={() => setSnackMessage(null)}
-        message={snackMessage}
-      />
-    </Box>
+      {snackMessage && (
+        <div onClick={() => setSnackMessage(null)} className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 cursor-pointer rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-4 py-2.5 text-xs text-[var(--text)] shadow-xl">
+          {snackMessage}
+        </div>
+      )}
+    </div>
   );
 }

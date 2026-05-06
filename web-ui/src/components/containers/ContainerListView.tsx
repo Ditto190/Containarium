@@ -1,29 +1,9 @@
 'use client';
 
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Paper,
-  Chip,
-  IconButton,
-  Tooltip,
-  Box,
-  LinearProgress,
-  Typography,
-} from '@mui/material';
-import DeleteIcon from '@mui/icons-material/Delete';
-import PlayArrowIcon from '@mui/icons-material/PlayArrow';
-import StopIcon from '@mui/icons-material/Stop';
-import TerminalIcon from '@mui/icons-material/Terminal';
-import DesktopWindowsIcon from '@mui/icons-material/DesktopWindows';
-import SecurityIcon from '@mui/icons-material/Security';
-import LabelIcon from '@mui/icons-material/Label';
-import TuneIcon from '@mui/icons-material/Tune';
-import PeopleIcon from '@mui/icons-material/People';
+  Trash2, Play, Square, Terminal, Monitor, Shield,
+  Tag, SlidersHorizontal, Users,
+} from 'lucide-react';
 import { Container, ContainerState, ContainerMetricsWithRate } from '@/src/types/container';
 
 interface ContainerListViewProps {
@@ -39,327 +19,218 @@ interface ContainerListViewProps {
   onManageCollaborators?: (username: string) => void;
 }
 
-/**
- * Parse a size string like "4GB", "512MB", "50G" to bytes
- */
-function parseSize(sizeStr: string): number {
-  if (!sizeStr) return 0;
-  const match = sizeStr.match(/^([\d.]+)\s*(B|KB|MB|GB|TB|K|M|G|T)?$/i);
-  if (!match) return 0;
-  const value = parseFloat(match[1]);
-  const unit = (match[2] || 'B').toUpperCase();
-  const multipliers: Record<string, number> = {
-    'B': 1,
-    'K': 1024,
-    'KB': 1024,
-    'M': 1024 * 1024,
-    'MB': 1024 * 1024,
-    'G': 1024 * 1024 * 1024,
-    'GB': 1024 * 1024 * 1024,
-    'T': 1024 * 1024 * 1024 * 1024,
-    'TB': 1024 * 1024 * 1024 * 1024,
-  };
-  return value * (multipliers[unit] || 1);
+function parseSize(s: string): number {
+  if (!s) return 0;
+  const m = s.match(/^([\d.]+)\s*(B|KB|MB|GB|TB|K|M|G|T)?$/i);
+  if (!m) return 0;
+  const v = parseFloat(m[1]);
+  const u = (m[2] || 'B').toUpperCase();
+  const mul: Record<string, number> = { B: 1, K: 1024, KB: 1024, M: 1048576, MB: 1048576, G: 1073741824, GB: 1073741824, T: 1099511627776, TB: 1099511627776 };
+  return v * (mul[u] || 1);
 }
 
-/**
- * Format bytes to human readable string
- */
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+function formatBytes(b: number): string {
+  if (b === 0) return '0 B';
+  const k = 1024, sz = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(b) / Math.log(k));
+  return parseFloat((b / Math.pow(k, i)).toFixed(1)) + ' ' + sz[i];
 }
 
-function getStateColor(state: ContainerState): 'success' | 'error' | 'warning' | 'default' {
+function stateBadge(state: ContainerState) {
   switch (state) {
-    case 'Running':
-      return 'success';
-    case 'Stopped':
-      return 'error';
+    case 'Running':     return 'bg-emerald-500/15 text-[var(--c-emerald)] border-emerald-500/30';
+    case 'Stopped':     return 'bg-red-500/15 text-[var(--c-red)] border-red-500/30';
     case 'Frozen':
     case 'Creating':
-    case 'Provisioning':
-      return 'warning';
-    default:
-      return 'default';
+    case 'Provisioning': return 'bg-amber-500/15 text-[var(--c-amber)] border-amber-500/30';
+    default:            return 'bg-zinc-500/15 text-zinc-400 border-zinc-500/30';
   }
 }
 
-function getUsageColor(percent: number): 'success' | 'warning' | 'error' {
-  if (percent < 60) return 'success';
-  if (percent < 80) return 'warning';
-  return 'error';
-}
-
-interface UsageBarProps {
-  used: number;
-  total: number;
-  label?: string;
-}
-
-function UsageBar({ used, total, label }: UsageBarProps) {
-  const percent = total > 0 ? Math.min((used / total) * 100, 100) : 0;
-  const color = getUsageColor(percent);
-
+function MiniBar({ pct }: { pct: number }) {
+  const color = pct > 80 ? 'bg-red-500' : pct > 60 ? 'bg-amber-500' : 'bg-emerald-500';
   return (
-    <Tooltip title={`${formatBytes(used)} / ${formatBytes(total)} (${percent.toFixed(1)}%)`}>
-      <Box sx={{ minWidth: 100 }}>
-        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.25 }}>
-          {label && `${label}: `}{formatBytes(used)} / {formatBytes(total)}
-        </Typography>
-        <LinearProgress
-          variant="determinate"
-          value={percent}
-          color={color}
-          sx={{ height: 4, borderRadius: 2 }}
-        />
-      </Box>
-    </Tooltip>
+    <div className="h-1 w-20 rounded-full bg-zinc-800">
+      <div className={`h-full rounded-full ${color}`} style={{ width: `${Math.min(pct, 100)}%` }} />
+    </div>
+  );
+}
+
+function IconBtn({ title, onClick, className = '', children }: { title: string; onClick: () => void; className?: string; children: React.ReactNode }) {
+  return (
+    <button
+      title={title}
+      onClick={onClick}
+      className={`rounded p-1 text-[var(--text-muted)] transition-colors hover:text-[var(--text)] hover:bg-[var(--surface-2)] ${className}`}
+    >
+      {children}
+    </button>
   );
 }
 
 export default function ContainerListView({
-  containers,
-  metricsMap,
-  onDelete,
-  onStart,
-  onStop,
-  onTerminal,
-  onEditFirewall,
-  onEditLabels,
-  onResize,
-  onManageCollaborators,
+  containers, metricsMap, onDelete, onStart, onStop, onTerminal,
+  onEditFirewall, onEditLabels, onResize, onManageCollaborators,
 }: ContainerListViewProps) {
   return (
-    <TableContainer component={Paper} variant="outlined">
-      <Table size="small">
-        <TableHead>
-          <TableRow sx={{ bgcolor: 'grey.50' }}>
-            <TableCell><strong>Name</strong></TableCell>
-            <TableCell><strong>State</strong></TableCell>
-            <TableCell><strong>IP Address</strong></TableCell>
-            <TableCell><strong>CPU</strong></TableCell>
-            <TableCell><strong>Memory</strong></TableCell>
-            <TableCell><strong>Disk</strong></TableCell>
-            <TableCell><strong>Node</strong></TableCell>
-            <TableCell><strong>Labels</strong></TableCell>
-            <TableCell align="right"><strong>Actions</strong></TableCell>
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {containers.map((container) => {
-            const metrics = metricsMap[container.name];
-            const isRunning = container.state === 'Running';
-            const username = container.username || container.name;
+    <div className="overflow-x-auto rounded-xl border border-[var(--border-subtle)]">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="border-b border-[var(--border-subtle)] bg-[var(--surface)]">
+            {['Name', 'State', 'IP Address', 'CPU', 'Memory', 'Disk', 'Node', 'Labels', ''].map((h) => (
+              <th key={h} className="px-3 py-2.5 text-left font-medium text-[var(--text-secondary)] whitespace-nowrap last:text-right">
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {containers.map((c) => {
+            const metrics = metricsMap[c.name];
+            const isRunning = c.state === 'Running';
+            const username = c.username || c.name;
 
-            // Parse limits
-            const memoryLimit = parseSize(container.memory);
-            const diskLimit = parseSize(container.disk);
-            const cpuCores = parseInt(container.cpu) || 0;
-
-            // Get usage from metrics
-            const memoryUsed = metrics?.memoryUsageBytes || 0;
+            const memLimit = parseSize(c.memory);
+            const diskLimit = parseSize(c.disk);
+            const cpuCores = parseInt(c.cpu) || 0;
+            const memUsed = metrics?.memoryUsageBytes || 0;
             const diskUsed = metrics?.diskUsageBytes || 0;
-            const cpuPercent = metrics?.cpuUsagePercent || 0;
+            const cpuPct = metrics?.cpuUsagePercent || 0;
+            const memPct = memLimit > 0 ? (memUsed / memLimit) * 100 : 0;
+            const diskPct = diskLimit > 0 ? (diskUsed / diskLimit) * 100 : 0;
 
             return (
-              <TableRow
-                key={container.name}
-                sx={{ '&:hover': { bgcolor: 'action.hover' } }}
-              >
-                <TableCell>
-                  <Box>
-                    <Typography variant="body2" fontWeight="medium">
-                      {username}
-                    </Typography>
-                    {container.image && (
-                      <Typography variant="caption" color="text.secondary">
-                        {container.image}
-                      </Typography>
-                    )}
-                  </Box>
-                </TableCell>
+              <tr key={c.name} className="border-b border-[var(--border-subtle)] transition-colors hover:bg-[var(--surface)]">
+                {/* Name */}
+                <td className="px-3 py-2.5">
+                  <p className="font-medium text-[var(--text)]">{username}</p>
+                  {c.image && <p className="text-[var(--text-muted)]">{c.image}</p>}
+                </td>
 
-                <TableCell>
-                  <Chip
-                    label={container.state}
-                    color={getStateColor(container.state)}
-                    size="small"
-                  />
-                </TableCell>
+                {/* State */}
+                <td className="px-3 py-2.5">
+                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${stateBadge(c.state)}`}>
+                    {c.state}
+                  </span>
+                </td>
 
-                <TableCell>
-                  <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
-                    {container.ipAddress || '-'}
-                  </Typography>
-                </TableCell>
+                {/* IP */}
+                <td className="px-3 py-2.5 font-mono text-[var(--text-secondary)]">
+                  {c.ipAddress || <span className="text-[var(--text-muted)]">—</span>}
+                </td>
 
-                <TableCell>
+                {/* CPU */}
+                <td className="px-3 py-2.5">
                   {isRunning && cpuCores > 0 ? (
-                    <Tooltip title={`${cpuPercent.toFixed(1)}% of ${cpuCores} cores`}>
-                      <Typography variant="body2">
-                        {cpuPercent.toFixed(1)}% / {cpuCores}c
-                      </Typography>
-                    </Tooltip>
+                    <div title={`${cpuPct.toFixed(1)}% of ${cpuCores} cores`}>
+                      <p className="text-[var(--text)]">{cpuPct.toFixed(1)}% / {cpuCores}c</p>
+                      <MiniBar pct={cpuPct / cpuCores} />
+                    </div>
                   ) : (
-                    <Typography variant="body2" color="text.secondary">
-                      {cpuCores > 0 ? `${cpuCores} cores` : '-'}
-                    </Typography>
+                    <span className="text-[var(--text-muted)]">{cpuCores > 0 ? `${cpuCores}c` : '—'}</span>
                   )}
-                </TableCell>
+                </td>
 
-                <TableCell>
-                  {isRunning && memoryLimit > 0 ? (
-                    <UsageBar used={memoryUsed} total={memoryLimit} />
+                {/* Memory */}
+                <td className="px-3 py-2.5">
+                  {isRunning && memLimit > 0 ? (
+                    <div title={`${formatBytes(memUsed)} / ${formatBytes(memLimit)}`}>
+                      <p className="text-[var(--text)]">{formatBytes(memUsed)} / {c.memory}</p>
+                      <MiniBar pct={memPct} />
+                    </div>
                   ) : (
-                    <Typography variant="body2" color="text.secondary">
-                      {container.memory || '-'}
-                    </Typography>
+                    <span className="text-[var(--text-muted)]">{c.memory || '—'}</span>
                   )}
-                </TableCell>
+                </td>
 
-                <TableCell>
+                {/* Disk */}
+                <td className="px-3 py-2.5">
                   {isRunning && diskLimit > 0 ? (
-                    <UsageBar used={diskUsed} total={diskLimit} />
+                    <div title={`${formatBytes(diskUsed)} / ${formatBytes(diskLimit)}`}>
+                      <p className="text-[var(--text)]">{formatBytes(diskUsed)} / {c.disk}</p>
+                      <MiniBar pct={diskPct} />
+                    </div>
                   ) : isRunning && diskUsed > 0 ? (
-                    <Typography variant="body2">
-                      {formatBytes(diskUsed)} used
-                    </Typography>
+                    <span className="text-[var(--text)]">{formatBytes(diskUsed)} used</span>
                   ) : (
-                    <Typography variant="body2" color="text.secondary">
-                      {container.disk || '-'}
-                    </Typography>
+                    <span className="text-[var(--text-muted)]">{c.disk || '—'}</span>
                   )}
-                </TableCell>
+                </td>
 
-                <TableCell>
-                  {container.backendId ? (
-                    <Chip
-                      label={container.backendId}
-                      size="small"
-                      variant="outlined"
-                      color={container.backendId.startsWith('tunnel-') ? 'secondary' : 'primary'}
-                    />
-                  ) : (
-                    <Typography variant="caption" color="text.secondary">-</Typography>
-                  )}
-                </TableCell>
+                {/* Node */}
+                <td className="px-3 py-2.5">
+                  {c.backendId ? (
+                    <span className={`rounded border px-1.5 py-0.5 text-[10px] ${c.backendId.startsWith('tunnel-') ? 'border-indigo-500/30 bg-indigo-500/10 text-indigo-400' : 'border-blue-500/30 bg-blue-500/10 text-[var(--c-blue)]'}`}>
+                      {c.backendId}
+                    </span>
+                  ) : <span className="text-[var(--text-muted)]">—</span>}
+                </td>
 
-                <TableCell>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, maxWidth: 180, flex: 1 }}>
-                      {container.labels && Object.keys(container.labels).length > 0 ? (
-                        Object.entries(container.labels).map(([key, value]) => (
-                          <Tooltip key={key} title={`${key}=${value}`}>
-                            <Chip
-                              label={`${key}=${value}`}
-                              size="small"
-                              variant="outlined"
-                              sx={{
-                                maxWidth: 150,
-                                '& .MuiChip-label': {
-                                  overflow: 'hidden',
-                                  textOverflow: 'ellipsis'
-                                }
-                              }}
-                            />
-                          </Tooltip>
-                        ))
-                      ) : (
-                        <Typography variant="body2" color="text.secondary">-</Typography>
-                      )}
-                    </Box>
+                {/* Labels */}
+                <td className="px-3 py-2.5">
+                  <div className="flex flex-wrap items-center gap-1 max-w-[180px]">
+                    {c.labels && Object.keys(c.labels).length > 0 ? (
+                      Object.entries(c.labels).slice(0, 3).map(([k, v]) => (
+                        <span key={k} title={`${k}=${v}`} className="max-w-[130px] truncate rounded bg-[var(--surface-2)] px-1.5 py-0.5 text-[10px] text-[var(--text-secondary)]">
+                          {k}={v}
+                        </span>
+                      ))
+                    ) : <span className="text-[var(--text-muted)]">—</span>}
                     {onEditLabels && (
-                      <Tooltip title="Edit Labels">
-                        <IconButton
-                          size="small"
-                          onClick={() => onEditLabels(username, container.labels || {})}
-                          sx={{ opacity: 0.6, '&:hover': { opacity: 1 } }}
-                        >
-                          <LabelIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
+                      <IconBtn title="Edit Labels" onClick={() => onEditLabels(username, c.labels || {})}>
+                        <Tag size={11} />
+                      </IconBtn>
                     )}
-                  </Box>
-                </TableCell>
+                  </div>
+                </td>
 
-                <TableCell align="right">
-                  <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 0.5 }}>
-                    {isRunning && container.accessType === 'ACCESS_TYPE_RDP' && (
-                      <Tooltip title="Remote Desktop (RDP)">
-                        <IconButton
-                          size="small"
-                          color="primary"
-                          onClick={() => window.open('/guacamole/', '_blank')}
-                        >
-                          <DesktopWindowsIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
+                {/* Actions */}
+                <td className="px-3 py-2.5">
+                  <div className="flex items-center justify-end gap-0.5">
+                    {isRunning && c.accessType === 'ACCESS_TYPE_RDP' && (
+                      <IconBtn title="Remote Desktop" onClick={() => window.open('/guacamole/', '_blank')}>
+                        <Monitor size={13} />
+                      </IconBtn>
                     )}
-                    {isRunning && container.accessType !== 'ACCESS_TYPE_RDP' && onTerminal && (
-                      <Tooltip title="Terminal">
-                        <IconButton size="small" color="primary" onClick={() => onTerminal(username)}>
-                          <TerminalIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
+                    {isRunning && c.accessType !== 'ACCESS_TYPE_RDP' && onTerminal && (
+                      <IconBtn title="Terminal" onClick={() => onTerminal(username)} className="hover:text-[var(--c-blue)]">
+                        <Terminal size={13} />
+                      </IconBtn>
                     )}
                     {onResize && (
-                      <Tooltip title="Resize Resources">
-                        <IconButton
-                          size="small"
-                          color="info"
-                          onClick={() => onResize(username, {
-                            cpu: container.cpu,
-                            memory: container.memory,
-                            disk: container.disk,
-                          })}
-                        >
-                          <TuneIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
+                      <IconBtn title="Resize" onClick={() => onResize(username, { cpu: c.cpu, memory: c.memory, disk: c.disk })}>
+                        <SlidersHorizontal size={13} />
+                      </IconBtn>
                     )}
                     {isRunning && onManageCollaborators && (
-                      <Tooltip title="Collaborators">
-                        <IconButton size="small" color="secondary" onClick={() => onManageCollaborators(username)}>
-                          <PeopleIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
+                      <IconBtn title="Collaborators" onClick={() => onManageCollaborators(username)}>
+                        <Users size={13} />
+                      </IconBtn>
                     )}
                     {onEditFirewall && (
-                      <Tooltip title="Firewall">
-                        <IconButton size="small" color="warning" onClick={() => onEditFirewall(username)}>
-                          <SecurityIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
+                      <IconBtn title="Firewall" onClick={() => onEditFirewall(username)} className="hover:text-[var(--c-amber)]">
+                        <Shield size={13} />
+                      </IconBtn>
                     )}
                     {isRunning ? (
-                      <Tooltip title="Stop">
-                        <IconButton size="small" onClick={() => onStop?.(username)}>
-                          <StopIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
+                      <IconBtn title="Stop" onClick={() => onStop?.(username)} className="hover:text-[var(--c-amber)]">
+                        <Square size={13} />
+                      </IconBtn>
                     ) : (
-                      <Tooltip title="Start">
-                        <IconButton size="small" onClick={() => onStart?.(username)}>
-                          <PlayArrowIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
+                      <IconBtn title="Start" onClick={() => onStart?.(username)} className="hover:text-[var(--c-emerald)]">
+                        <Play size={13} />
+                      </IconBtn>
                     )}
-                    <Tooltip title="Delete">
-                      <IconButton size="small" color="error" onClick={() => onDelete(username)}>
-                        <DeleteIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                  </Box>
-                </TableCell>
-              </TableRow>
+                    <IconBtn title="Delete" onClick={() => onDelete(username)} className="hover:text-[var(--c-red)] hover:bg-red-500/10">
+                      <Trash2 size={13} />
+                    </IconBtn>
+                  </div>
+                </td>
+              </tr>
             );
           })}
-        </TableBody>
-      </Table>
-    </TableContainer>
+        </tbody>
+      </table>
+    </div>
   );
 }

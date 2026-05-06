@@ -1,16 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import {
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  IconButton,
-  Box,
-  Typography,
-  CircularProgress,
-} from '@mui/material';
-import CloseIcon from '@mui/icons-material/Close';
+import { X, Loader2 } from 'lucide-react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
@@ -32,16 +23,7 @@ interface TerminalMessage {
   rows?: number;
 }
 
-export default function TerminalDialog({
-  open,
-  onClose,
-  containerName,
-  username,
-  serverEndpoint,
-  token,
-}: TerminalDialogProps) {
-  console.log('TerminalDialog render:', { open, containerName, username, serverEndpoint: serverEndpoint?.substring(0, 50) });
-
+export default function TerminalDialog({ open, onClose, containerName, username, serverEndpoint, token }: TerminalDialogProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const terminalInstance = useRef<Terminal | null>(null);
   const fitAddon = useRef<FitAddon | null>(null);
@@ -50,239 +32,113 @@ export default function TerminalDialog({
   const [error, setError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
 
-  // Cleanup function
   const cleanup = useCallback(() => {
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-    if (terminalInstance.current) {
-      terminalInstance.current.dispose();
-      terminalInstance.current = null;
-    }
+    if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+    if (terminalInstance.current) { terminalInstance.current.dispose(); terminalInstance.current = null; }
     fitAddon.current = null;
-    setConnected(false);
-    setConnecting(false);
-    setError(null);
+    setConnected(false); setConnecting(false); setError(null);
   }, []);
 
-  // Connect to terminal WebSocket
   const connect = useCallback(() => {
-    console.log('connect() called:', { terminalRef: !!terminalRef.current, connecting, connected });
     if (!terminalRef.current || connecting || connected) return;
+    setConnecting(true); setError(null);
 
-    setConnecting(true);
-    setError(null);
-
-    // Create terminal
     const term = new Terminal({
-      cursorBlink: true,
-      fontSize: 14,
+      cursorBlink: true, fontSize: 14,
       fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-      theme: {
-        background: '#1e1e1e',
-        foreground: '#d4d4d4',
-        cursor: '#d4d4d4',
-        selectionBackground: '#264f78',
-      },
+      theme: { background: '#09090b', foreground: '#d4d4d4', cursor: '#d4d4d4', selectionBackground: '#264f78' },
     });
 
     const fit = new FitAddon();
-    const webLinks = new WebLinksAddon();
-
     term.loadAddon(fit);
-    term.loadAddon(webLinks);
+    term.loadAddon(new WebLinksAddon());
     term.open(terminalRef.current);
     fit.fit();
-
     terminalInstance.current = term;
     fitAddon.current = fit;
 
-    // Build WebSocket URL
-    let wsUrl = serverEndpoint.replace(/^http/, 'ws');
-    // Remove /v1 suffix if present for the terminal endpoint
-    wsUrl = wsUrl.replace(/\/v1\/?$/, '');
-    // Sanitize token - remove any whitespace/newlines
+    let wsUrl = serverEndpoint.replace(/^http/, 'ws').replace(/\/v1\/?$/, '');
     const cleanToken = token.replace(/\s+/g, '');
     wsUrl = `${wsUrl}/v1/containers/${username}/terminal?token=${encodeURIComponent(cleanToken)}`;
 
-    console.log('Terminal WebSocket URL:', wsUrl);
-    console.log('Server endpoint:', serverEndpoint);
-    console.log('Username:', username);
-
     term.writeln(`Connecting to ${containerName}...`);
-    term.writeln(`URL: ${wsUrl.split('?')[0]}`);
 
-    // Connect WebSocket
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
     ws.onopen = () => {
-      setConnected(true);
-      setConnecting(false);
+      setConnected(true); setConnecting(false);
       term.writeln('Connected!\r\n');
-
-      // Send initial resize
-      const msg: TerminalMessage = {
-        type: 'resize',
-        cols: term.cols,
-        rows: term.rows,
-      };
-      ws.send(JSON.stringify(msg));
+      ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
     };
 
     ws.onmessage = (event) => {
       try {
         const msg: TerminalMessage = JSON.parse(event.data);
-        if (msg.type === 'output' && msg.data) {
-          term.write(msg.data);
-        } else if (msg.type === 'error' && msg.data) {
-          term.writeln(`\r\n\x1b[31mError: ${msg.data}\x1b[0m`);
-          setError(msg.data);
-        }
-      } catch {
-        // Raw data, write directly
-        term.write(event.data);
-      }
+        if (msg.type === 'output' && msg.data) term.write(msg.data);
+        else if (msg.type === 'error' && msg.data) { term.writeln(`\r\n\x1b[31mError: ${msg.data}\x1b[0m`); setError(msg.data); }
+      } catch { term.write(event.data); }
     };
 
-    ws.onerror = () => {
-      setError('WebSocket connection error');
-      setConnecting(false);
-      term.writeln('\r\n\x1b[31mConnection error\x1b[0m');
-    };
+    ws.onerror = () => { setError('WebSocket connection error'); setConnecting(false); term.writeln('\r\n\x1b[31mConnection error\x1b[0m'); };
+    ws.onclose = () => { setConnected(false); setConnecting(false); term.writeln('\r\n\x1b[33mConnection closed\x1b[0m'); };
 
-    ws.onclose = () => {
-      setConnected(false);
-      setConnecting(false);
-      term.writeln('\r\n\x1b[33mConnection closed\x1b[0m');
-    };
-
-    // Handle terminal input
     term.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        const msg: TerminalMessage = {
-          type: 'input',
-          data: data,
-        };
-        ws.send(JSON.stringify(msg));
-      }
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'input', data }));
     });
 
-    // Handle resize
     const handleResize = () => {
       if (fitAddon.current && terminalInstance.current) {
         fitAddon.current.fit();
         if (ws.readyState === WebSocket.OPEN) {
-          const msg: TerminalMessage = {
-            type: 'resize',
-            cols: terminalInstance.current.cols,
-            rows: terminalInstance.current.rows,
-          };
-          ws.send(JSON.stringify(msg));
+          ws.send(JSON.stringify({ type: 'resize', cols: terminalInstance.current.cols, rows: terminalInstance.current.rows }));
         }
       }
     };
-
     window.addEventListener('resize', handleResize);
-
-    return () => {
-      window.removeEventListener('resize', handleResize);
-    };
+    return () => window.removeEventListener('resize', handleResize);
   }, [serverEndpoint, username, token, containerName, connecting, connected]);
 
-  // Connect when dialog opens
   useEffect(() => {
-    console.log('useEffect triggered:', { open, hasRef: !!terminalRef.current });
     if (open) {
-      // Delay to ensure DOM is ready and ref is attached
-      const timer = setTimeout(() => {
-        console.log('setTimeout callback:', { hasRef: !!terminalRef.current });
-        if (terminalRef.current) {
-          connect();
-        } else {
-          console.log('terminalRef still null, retrying...');
-          // Retry after another delay
-          setTimeout(() => {
-            if (terminalRef.current) {
-              connect();
-            }
-          }, 200);
-        }
+      const t = setTimeout(() => {
+        if (terminalRef.current) connect();
+        else setTimeout(() => { if (terminalRef.current) connect(); }, 200);
       }, 100);
-      return () => clearTimeout(timer);
+      return () => clearTimeout(t);
     }
   }, [open, connect]);
 
-  // Cleanup when dialog closes
-  useEffect(() => {
-    if (!open) {
-      cleanup();
-    }
-  }, [open, cleanup]);
+  useEffect(() => { if (!open) cleanup(); }, [open, cleanup]);
 
-  // Fit terminal when dialog resizes
   useEffect(() => {
     if (open && fitAddon.current) {
-      const timer = setTimeout(() => {
-        fitAddon.current?.fit();
-      }, 100);
-      return () => clearTimeout(timer);
+      const t = setTimeout(() => fitAddon.current?.fit(), 100);
+      return () => clearTimeout(t);
     }
   }, [open]);
 
-  const handleClose = () => {
-    cleanup();
-    onClose();
-  };
+  const handleClose = () => { cleanup(); onClose(); };
+
+  if (!open) return null;
 
   return (
-    <Dialog
-      open={open}
-      onClose={handleClose}
-      maxWidth="lg"
-      fullWidth
-      PaperProps={{
-        sx: {
-          height: '80vh',
-          maxHeight: '80vh',
-        },
-      }}
-    >
-      <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', py: 1 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Typography variant="h6">
-            Terminal: {containerName}
-          </Typography>
-          {connecting && <CircularProgress size={20} />}
-          {connected && (
-            <Typography variant="caption" sx={{ color: 'success.main' }}>
-              Connected
-            </Typography>
-          )}
-          {error && (
-            <Typography variant="caption" sx={{ color: 'error.main' }}>
-              {error}
-            </Typography>
-          )}
-        </Box>
-        <IconButton onClick={handleClose} size="small">
-          <CloseIcon />
-        </IconButton>
-      </DialogTitle>
-      <DialogContent sx={{ p: 0, bgcolor: '#1e1e1e', overflow: 'hidden' }}>
-        <Box
-          ref={terminalRef}
-          sx={{
-            width: '100%',
-            height: '100%',
-            '& .xterm': {
-              height: '100%',
-              padding: '8px',
-            },
-          }}
-        />
-      </DialogContent>
-    </Dialog>
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={handleClose} />
+      <div className="relative z-10 flex h-[80vh] w-[90vw] max-w-5xl flex-col rounded-xl border border-[var(--border)] bg-[#09090b] shadow-2xl overflow-hidden">
+        {/* Header */}
+        <div className="flex items-center gap-2 border-b border-zinc-800 px-4 py-2.5">
+          <span className="text-xs font-medium text-zinc-300">Terminal: {containerName}</span>
+          {connecting && <Loader2 size={13} className="animate-spin text-zinc-500" />}
+          {connected && <span className="text-[10px] text-[var(--c-emerald)]">Connected</span>}
+          {error && <span className="text-[10px] text-[var(--c-red)]">{error}</span>}
+          <button onClick={handleClose} className="ml-auto rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 transition-colors">
+            <X size={14} />
+          </button>
+        </div>
+        {/* Terminal */}
+        <div ref={terminalRef} className="flex-1 overflow-hidden [&_.xterm]:h-full [&_.xterm]:p-2" />
+      </div>
+    </div>
   );
 }
