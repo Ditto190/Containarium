@@ -1,11 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Box, Card, CardContent, Typography, LinearProgress, Grid, Tooltip, ToggleButtonGroup, ToggleButton } from '@mui/material';
-import MemoryIcon from '@mui/icons-material/Memory';
-import StorageIcon from '@mui/icons-material/Storage';
-import ComputerIcon from '@mui/icons-material/Computer';
-import GpuIcon from '@mui/icons-material/DeveloperBoard';
+import { Cpu, HardDrive, MemoryStick, CircuitBoard } from 'lucide-react';
 import { SystemInfo, BackendInfo, gpuVendorDisplayName, gpuModelDisplayName } from '@/src/types/container';
 
 interface SystemResourcesCardProps {
@@ -14,225 +10,142 @@ interface SystemResourcesCardProps {
   onSelectBackend?: (backendId: string) => Promise<SystemInfo | null>;
 }
 
-/**
- * Format bytes to human readable string
- */
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+function formatBytes(b: number): string {
+  if (b === 0) return '0 B';
+  const k = 1024, sz = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(b) / Math.log(k));
+  return parseFloat((b / Math.pow(k, i)).toFixed(1)) + ' ' + sz[i];
 }
 
-/**
- * Get color based on usage percentage
- */
-function getUsageColor(percent: number): 'success' | 'warning' | 'error' {
-  if (percent < 60) return 'success';
-  if (percent < 80) return 'warning';
-  return 'error';
+function barColor(pct: number) {
+  if (pct > 80) return 'bg-red-500';
+  if (pct > 60) return 'bg-amber-500';
+  return 'bg-emerald-500';
+}
+
+function ResourceItem({ icon: Icon, label, value, sub, pct, title }: { icon: React.ElementType; label: string; value: string; sub?: string; pct?: number; title?: string }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-1.5">
+        <Icon size={12} className="text-[var(--text-muted)]" />
+        <span className="text-[11px] font-medium text-[var(--text-secondary)]">{label}</span>
+      </div>
+      <div className="flex items-baseline gap-1">
+        <span className="text-sm font-semibold text-[var(--text)]">{value}</span>
+        {sub && <span className="text-xs text-[var(--text-muted)]">{sub}</span>}
+      </div>
+      {pct !== undefined && (
+        <div className="h-1.5 w-full rounded-full bg-zinc-800 overflow-hidden" title={title}>
+          <div className={`h-full rounded-full transition-all ${barColor(pct)}`} style={{ width: `${Math.min(pct, 100)}%` }} />
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function SystemResourcesCard({ systemInfo, backends, onSelectBackend }: SystemResourcesCardProps) {
-  const [selectedBackend, setSelectedBackend] = useState<string>('');
+  const [selectedBackend, setSelectedBackend] = useState('');
   const [backendSystemInfo, setBackendSystemInfo] = useState<SystemInfo | null>(null);
-  const [loading, setLoading] = useState(false);
 
   const activeInfo = selectedBackend && backendSystemInfo ? backendSystemInfo : systemInfo;
 
-  const handleBackendChange = async (_: React.MouseEvent<HTMLElement>, value: string | null) => {
-    const newValue = value || '';
-    setSelectedBackend(newValue);
-    if (!newValue || !onSelectBackend) {
-      setBackendSystemInfo(null);
-      return;
-    }
-    setLoading(true);
-    try {
-      const info = await onSelectBackend(newValue);
-      setBackendSystemInfo(info);
-    } catch {
-      setBackendSystemInfo(null);
-    } finally {
-      setLoading(false);
-    }
+  const handleBackendChange = async (id: string) => {
+    setSelectedBackend(id);
+    if (!id || !onSelectBackend) { setBackendSystemInfo(null); return; }
+    try { setBackendSystemInfo(await onSelectBackend(id)); } catch { setBackendSystemInfo(null); }
   };
 
-  // Auto-refresh selected backend info
   useEffect(() => {
     if (!selectedBackend || !onSelectBackend) return;
-    const interval = setInterval(async () => {
-      try {
-        const info = await onSelectBackend(selectedBackend);
-        setBackendSystemInfo(info);
-      } catch { /* ignore */ }
+    const id = setInterval(async () => {
+      try { setBackendSystemInfo(await onSelectBackend(selectedBackend)); } catch { /* ignore */ }
     }, 60000);
-    return () => clearInterval(interval);
+    return () => clearInterval(id);
   }, [selectedBackend, onSelectBackend]);
 
-  if (!activeInfo) {
-    return null;
-  }
+  if (!activeInfo) return null;
 
-  // Calculate CPU load percentage (load average / total cores * 100)
-  // Load average can exceed 100% if there are more processes than cores
-  const cpuLoad1min = activeInfo.cpuLoad1min || 0;
-  const cpuLoadPercent = activeInfo.totalCpus > 0
-    ? Math.min((cpuLoad1min / activeInfo.totalCpus) * 100, 100)
-    : 0;
-
-  // Calculate percentages
-  const memoryUsed = (activeInfo.totalMemoryBytes || 0) - (activeInfo.availableMemoryBytes || 0);
-  const memoryPercent = activeInfo.totalMemoryBytes
-    ? (memoryUsed / activeInfo.totalMemoryBytes) * 100
-    : 0;
-
+  const cpuLoad1 = activeInfo.cpuLoad1min || 0;
+  const cpuPct = activeInfo.totalCpus > 0 ? Math.min((cpuLoad1 / activeInfo.totalCpus) * 100, 100) : 0;
+  const memUsed = (activeInfo.totalMemoryBytes || 0) - (activeInfo.availableMemoryBytes || 0);
+  const memPct = activeInfo.totalMemoryBytes ? (memUsed / activeInfo.totalMemoryBytes) * 100 : 0;
   const diskUsed = (activeInfo.totalDiskBytes || 0) - (activeInfo.availableDiskBytes || 0);
-  const diskPercent = activeInfo.totalDiskBytes
-    ? (diskUsed / activeInfo.totalDiskBytes) * 100
-    : 0;
+  const diskPct = activeInfo.totalDiskBytes ? (diskUsed / activeInfo.totalDiskBytes) * 100 : 0;
 
-  // Check if we have resource data
-  const hasResourceData = activeInfo.totalCpus > 0 || activeInfo.totalMemoryBytes > 0 || activeInfo.totalDiskBytes > 0;
+  const hasData = activeInfo.totalCpus > 0 || activeInfo.totalMemoryBytes > 0 || activeInfo.totalDiskBytes > 0;
+  if (!hasData) return null;
+
   const showBackendSelector = backends && backends.length > 1;
 
-  if (!hasResourceData) {
-    return null;
-  }
-
   return (
-    <Card sx={{ mb: 3 }}>
-      <CardContent sx={{ py: 2, '&:last-child': { pb: 2 } }}>
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-          <Typography variant="subtitle2" color="text.secondary">
-            System Resources{activeInfo.hostname ? ` — ${activeInfo.hostname}` : ''}
-          </Typography>
-          {showBackendSelector && (
-            <ToggleButtonGroup
-              value={selectedBackend}
-              exclusive
-              onChange={handleBackendChange}
-              size="small"
-              sx={{ '& .MuiToggleButton-root': { py: 0.25, px: 1.5, fontSize: '0.75rem' } }}
-            >
-              {backends.map(b => (
-                <ToggleButton key={b.id} value={b.id} disabled={!b.healthy}>
-                  {b.id}
-                </ToggleButton>
-              ))}
-            </ToggleButtonGroup>
-          )}
-        </Box>
-        <Grid container spacing={3}>
-          {/* CPU */}
-          {activeInfo.totalCpus > 0 && (
-            <Grid item xs={12} sm={4}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
-                <ComputerIcon fontSize="small" color="action" />
-                <Typography variant="body2" fontWeight="medium">
-                  CPU Load
-                </Typography>
-              </Box>
-              <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1 }}>
-                <Typography variant="h6">
-                  {cpuLoad1min.toFixed(2)}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  / {activeInfo.totalCpus} cores
-                </Typography>
-              </Box>
-              <Tooltip title={`${cpuLoadPercent.toFixed(1)}% utilized (1-min avg)`}>
-                <LinearProgress
-                  variant="determinate"
-                  value={cpuLoadPercent}
-                  color={getUsageColor(cpuLoadPercent)}
-                  sx={{ mt: 0.5, height: 6, borderRadius: 3 }}
-                />
-              </Tooltip>
-            </Grid>
-          )}
+    <div className="mb-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--surface)] p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <span className="text-xs font-medium text-[var(--text-muted)]">
+          System Resources{activeInfo.hostname ? ` — ${activeInfo.hostname}` : ''}
+        </span>
+        {showBackendSelector && (
+          <div className="flex rounded-md border border-[var(--border-subtle)] overflow-hidden">
+            {backends!.map(b => (
+              <button
+                key={b.id}
+                onClick={() => handleBackendChange(selectedBackend === b.id ? '' : b.id)}
+                disabled={!b.healthy}
+                className={`px-2.5 py-1 text-[10px] font-medium transition-colors disabled:opacity-40 ${selectedBackend === b.id ? 'bg-[var(--accent)] text-white' : 'bg-[var(--surface)] text-[var(--text-secondary)] hover:bg-[var(--surface-2)]'}`}
+              >
+                {b.id}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
 
-          {/* Memory */}
-          {activeInfo.totalMemoryBytes > 0 && (
-            <Grid item xs={12} sm={4}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
-                <MemoryIcon fontSize="small" color="action" />
-                <Typography variant="body2" fontWeight="medium">
-                  Memory
-                </Typography>
-              </Box>
-              <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1 }}>
-                <Typography variant="h6">
-                  {formatBytes(memoryUsed)}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  / {formatBytes(activeInfo.totalMemoryBytes)}
-                </Typography>
-              </Box>
-              <Tooltip title={`${memoryPercent.toFixed(1)}% used`}>
-                <LinearProgress
-                  variant="determinate"
-                  value={memoryPercent}
-                  color={getUsageColor(memoryPercent)}
-                  sx={{ mt: 0.5, height: 6, borderRadius: 3 }}
-                />
-              </Tooltip>
-            </Grid>
-          )}
-
-          {/* Disk */}
-          {activeInfo.totalDiskBytes > 0 && (
-            <Grid item xs={12} sm={4}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
-                <StorageIcon fontSize="small" color="action" />
-                <Typography variant="body2" fontWeight="medium">
-                  Storage
-                </Typography>
-              </Box>
-              <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1 }}>
-                <Typography variant="h6">
-                  {formatBytes(diskUsed)}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  / {formatBytes(activeInfo.totalDiskBytes)}
-                </Typography>
-              </Box>
-              <Tooltip title={`${diskPercent.toFixed(1)}% used`}>
-                <LinearProgress
-                  variant="determinate"
-                  value={diskPercent}
-                  color={getUsageColor(diskPercent)}
-                  sx={{ mt: 0.5, height: 6, borderRadius: 3 }}
-                />
-              </Tooltip>
-            </Grid>
-          )}
-
-          {/* GPU */}
-          {activeInfo.gpus && activeInfo.gpus.length > 0 && activeInfo.gpus.map((gpu, idx) => (
-            <Grid item xs={12} sm={4} key={gpu.pciAddress || idx}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
-                <GpuIcon fontSize="small" color="action" />
-                <Typography variant="body2" fontWeight="medium">
-                  GPU{activeInfo.gpus!.length > 1 ? ` #${idx}` : ''}
-                </Typography>
-              </Box>
-              <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1 }}>
-                <Typography variant="h6">
-                  {gpuModelDisplayName(gpu.model, gpu.modelName)}
-                </Typography>
-              </Box>
-              <Typography variant="caption" color="text.secondary">
-                {gpuVendorDisplayName(gpu.vendor)}
-                {gpu.driverVersion ? ` \u00B7 Driver ${gpu.driverVersion}` : ''}
-                {gpu.cudaVersion ? ` \u00B7 CUDA ${gpu.cudaVersion}` : ''}
-                {gpu.vramBytes > 0 ? ` \u00B7 ${formatBytes(gpu.vramBytes)} VRAM` : ''}
-              </Typography>
-            </Grid>
-          ))}
-        </Grid>
-      </CardContent>
-    </Card>
+      <div className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3 lg:grid-cols-4">
+        {activeInfo.totalCpus > 0 && (
+          <ResourceItem
+            icon={Cpu}
+            label="CPU Load"
+            value={cpuLoad1.toFixed(2)}
+            sub={`/ ${activeInfo.totalCpus} cores`}
+            pct={cpuPct}
+            title={`${cpuPct.toFixed(1)}% utilized (1-min avg)`}
+          />
+        )}
+        {activeInfo.totalMemoryBytes > 0 && (
+          <ResourceItem
+            icon={MemoryStick}
+            label="Memory"
+            value={formatBytes(memUsed)}
+            sub={`/ ${formatBytes(activeInfo.totalMemoryBytes)}`}
+            pct={memPct}
+            title={`${memPct.toFixed(1)}% used`}
+          />
+        )}
+        {activeInfo.totalDiskBytes > 0 && (
+          <ResourceItem
+            icon={HardDrive}
+            label="Storage"
+            value={formatBytes(diskUsed)}
+            sub={`/ ${formatBytes(activeInfo.totalDiskBytes)}`}
+            pct={diskPct}
+            title={`${diskPct.toFixed(1)}% used`}
+          />
+        )}
+        {activeInfo.gpus?.map((gpu, idx) => (
+          <div key={gpu.pciAddress || idx} className="flex flex-col gap-1.5">
+            <div className="flex items-center gap-1.5">
+              <CircuitBoard size={12} className="text-[var(--text-muted)]" />
+              <span className="text-[11px] font-medium text-[var(--text-secondary)]">GPU{activeInfo.gpus!.length > 1 ? ` #${idx}` : ''}</span>
+            </div>
+            <span className="text-sm font-semibold text-[var(--text)]">{gpuModelDisplayName(gpu.model, gpu.modelName)}</span>
+            <span className="text-[10px] text-[var(--text-muted)]">
+              {gpuVendorDisplayName(gpu.vendor)}
+              {gpu.driverVersion ? ` · Driver ${gpu.driverVersion}` : ''}
+              {gpu.cudaVersion ? ` · CUDA ${gpu.cudaVersion}` : ''}
+              {gpu.vramBytes > 0 ? ` · ${formatBytes(gpu.vramBytes)} VRAM` : ''}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }

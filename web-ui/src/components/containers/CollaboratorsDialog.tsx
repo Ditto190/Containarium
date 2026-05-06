@@ -1,31 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import {
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  TextField,
-  Button,
-  Alert,
-  Box,
-  IconButton,
-  Typography,
-  CircularProgress,
-  Divider,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Chip,
-  FormControlLabel,
-  Checkbox,
-} from '@mui/material';
-import DeleteIcon from '@mui/icons-material/Delete';
-import PersonAddIcon from '@mui/icons-material/PersonAdd';
+import { Loader2, UserPlus, Trash2, XCircle, CheckCircle } from 'lucide-react';
+import { Modal, ModalBtn, FormField, Input, Textarea } from '@/src/components/ui/Modal';
 import { Collaborator, AddCollaboratorRequest } from '@/src/types/container';
 
 interface CollaboratorsDialogProps {
@@ -38,15 +15,12 @@ interface CollaboratorsDialogProps {
   onRemove: (collaboratorUsername: string) => Promise<void>;
 }
 
-export default function CollaboratorsDialog({
-  open,
-  onClose,
-  ownerUsername,
-  collaborators,
-  isLoading,
-  onAdd,
-  onRemove,
-}: CollaboratorsDialogProps) {
+function formatDate(ts: number): string {
+  if (!ts) return '—';
+  return new Date(ts * 1000).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+export default function CollaboratorsDialog({ open, onClose, ownerUsername, collaborators, isLoading, onAdd, onRemove }: CollaboratorsDialogProps) {
   const [newUsername, setNewUsername] = useState('');
   const [newSSHKey, setNewSSHKey] = useState('');
   const [grantSudo, setGrantSudo] = useState(false);
@@ -58,38 +32,17 @@ export default function CollaboratorsDialog({
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
 
   const handleAdd = async () => {
-    const username = newUsername.trim();
-    const sshKey = newSSHKey.trim();
-
-    if (!username) {
-      setError('Username is required');
-      return;
+    const u = newUsername.trim(), k = newSSHKey.trim();
+    if (!u) { setError('Username is required'); return; }
+    if (!k) { setError('SSH public key is required'); return; }
+    if (!k.startsWith('ssh-') && !k.startsWith('ecdsa-') && !k.startsWith('sk-ssh-') && !k.startsWith('sk-ecdsa-')) {
+      setError('Invalid SSH public key format'); return;
     }
-    if (!sshKey) {
-      setError('SSH public key is required');
-      return;
-    }
-    if (!sshKey.startsWith('ssh-') && !sshKey.startsWith('ecdsa-') && !sshKey.startsWith('sk-ssh-') && !sshKey.startsWith('sk-ecdsa-')) {
-      setError('Invalid SSH public key format');
-      return;
-    }
-
-    setAdding(true);
-    setError(null);
-    setSuccess(null);
-
+    setAdding(true); setError(null); setSuccess(null);
     try {
-      const result = await onAdd({
-        collaboratorUsername: username,
-        sshPublicKey: sshKey,
-        grantSudo,
-        grantContainerRuntime,
-      });
-      setSuccess(`Added ${username}. SSH: ${result.sshCommand}`);
-      setNewUsername('');
-      setNewSSHKey('');
-      setGrantSudo(false);
-      setGrantContainerRuntime(false);
+      const result = await onAdd({ collaboratorUsername: u, sshPublicKey: k, grantSudo, grantContainerRuntime });
+      setSuccess(`Added ${u}. SSH: ${result.sshCommand}`);
+      setNewUsername(''); setNewSSHKey(''); setGrantSudo(false); setGrantContainerRuntime(false);
     } catch (err) {
       setError(`Failed to add collaborator: ${err instanceof Error ? err.message : err}`);
     } finally {
@@ -98,10 +51,7 @@ export default function CollaboratorsDialog({
   };
 
   const handleRemove = async (collaboratorUsername: string) => {
-    setRemovingUser(collaboratorUsername);
-    setError(null);
-    setSuccess(null);
-
+    setRemovingUser(collaboratorUsername); setError(null); setSuccess(null);
     try {
       await onRemove(collaboratorUsername);
       setSuccess(`Removed ${collaboratorUsername}`);
@@ -115,192 +65,132 @@ export default function CollaboratorsDialog({
 
   const handleClose = () => {
     if (adding) return;
-    setError(null);
-    setSuccess(null);
-    setNewUsername('');
-    setNewSSHKey('');
-    setGrantSudo(false);
-    setGrantContainerRuntime(false);
-    setConfirmRemove(null);
+    setError(null); setSuccess(null); setNewUsername(''); setNewSSHKey('');
+    setGrantSudo(false); setGrantContainerRuntime(false); setConfirmRemove(null);
     onClose();
   };
 
-  const formatDate = (unixTimestamp: number): string => {
-    if (!unixTimestamp) return '-';
-    return new Date(unixTimestamp * 1000).toLocaleDateString(undefined, {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    });
-  };
-
   return (
-    <Dialog open={open} onClose={handleClose} maxWidth="md" fullWidth>
-      <DialogTitle>
-        Collaborators
-        <Typography variant="body2" color="text.secondary">
-          {ownerUsername}-container
-        </Typography>
-      </DialogTitle>
-      <DialogContent>
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
-          {error && (
-            <Alert severity="error" onClose={() => setError(null)}>
-              {error}
-            </Alert>
-          )}
-          {success && (
-            <Alert severity="success" onClose={() => setSuccess(null)}>
-              {success}
-            </Alert>
-          )}
+    <Modal
+      open={open}
+      onClose={handleClose}
+      title={`Collaborators — ${ownerUsername}-container`}
+      size="lg"
+      footer={<ModalBtn onClick={handleClose} disabled={adding}>Close</ModalBtn>}
+    >
+      <div className="flex flex-col gap-5">
+        {error && (
+          <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-[var(--c-red)]">
+            <XCircle size={14} className="mt-0.5 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
+        {success && (
+          <div className="flex items-start gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-[var(--c-emerald)]">
+            <CheckCircle size={14} className="mt-0.5 shrink-0" />
+            <span>{success}</span>
+          </div>
+        )}
 
-          {/* Collaborator list */}
-          {isLoading ? (
-            <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}>
-              <CircularProgress size={24} />
-            </Box>
-          ) : collaborators.length === 0 ? (
-            <Typography variant="body2" color="text.secondary" sx={{ py: 2, textAlign: 'center' }}>
-              No collaborators yet
-            </Typography>
-          ) : (
-            <TableContainer>
-              <Table size="small">
-                <TableHead>
-                  <TableRow>
-                    <TableCell><strong>Username</strong></TableCell>
-                    <TableCell><strong>Account</strong></TableCell>
-                    <TableCell><strong>Permissions</strong></TableCell>
-                    <TableCell><strong>Added</strong></TableCell>
-                    <TableCell><strong>By</strong></TableCell>
-                    <TableCell align="right"><strong>Actions</strong></TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {collaborators.map((c) => (
-                    <TableRow key={c.id || c.collaboratorUsername}>
-                      <TableCell>{c.collaboratorUsername}</TableCell>
-                      <TableCell>
-                        <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>
-                          {c.accountName}
-                        </Typography>
-                      </TableCell>
-                      <TableCell>
-                        <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
-                          {c.hasSudo && <Chip label="sudo" size="small" color="warning" variant="outlined" />}
-                          {c.hasContainerRuntime && <Chip label="docker" size="small" color="info" variant="outlined" />}
-                          {!c.hasSudo && !c.hasContainerRuntime && <Typography variant="body2" color="text.secondary">su only</Typography>}
-                        </Box>
-                      </TableCell>
-                      <TableCell>{formatDate(c.addedAt)}</TableCell>
-                      <TableCell>{c.createdBy || '-'}</TableCell>
-                      <TableCell align="right">
-                        {confirmRemove === c.collaboratorUsername ? (
-                          <Box sx={{ display: 'flex', gap: 0.5, justifyContent: 'flex-end' }}>
-                            <Button
-                              size="small"
-                              color="error"
-                              variant="contained"
-                              disabled={removingUser === c.collaboratorUsername}
-                              onClick={() => handleRemove(c.collaboratorUsername)}
-                            >
-                              {removingUser === c.collaboratorUsername ? <CircularProgress size={16} /> : 'Confirm'}
-                            </Button>
-                            <Button
-                              size="small"
-                              onClick={() => setConfirmRemove(null)}
-                              disabled={removingUser === c.collaboratorUsername}
-                            >
-                              Cancel
-                            </Button>
-                          </Box>
-                        ) : (
-                          <IconButton
-                            size="small"
-                            color="error"
-                            onClick={() => setConfirmRemove(c.collaboratorUsername)}
-                          >
-                            <DeleteIcon fontSize="small" />
-                          </IconButton>
-                        )}
-                      </TableCell>
-                    </TableRow>
+        {/* Collaborator list */}
+        {isLoading ? (
+          <div className="flex justify-center py-6">
+            <Loader2 size={20} className="animate-spin text-[var(--text-secondary)]" />
+          </div>
+        ) : collaborators.length === 0 ? (
+          <p className="py-4 text-center text-xs text-[var(--text-muted)]">No collaborators yet</p>
+        ) : (
+          <div className="overflow-x-auto rounded-lg border border-[var(--border-subtle)]">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-[var(--border-subtle)] bg-[var(--surface-2)]">
+                  {['Username', 'Account', 'Permissions', 'Added', 'By', ''].map(h => (
+                    <th key={h} className="px-3 py-2 text-left font-medium text-[var(--text-secondary)] last:text-right">{h}</th>
                   ))}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          )}
+                </tr>
+              </thead>
+              <tbody>
+                {collaborators.map(c => (
+                  <tr key={c.id || c.collaboratorUsername} className="border-b border-[var(--border-subtle)] last:border-0">
+                    <td className="px-3 py-2 text-[var(--text)]">{c.collaboratorUsername}</td>
+                    <td className="px-3 py-2 font-mono text-[var(--text-secondary)]">{c.accountName}</td>
+                    <td className="px-3 py-2">
+                      <div className="flex gap-1 flex-wrap">
+                        {c.hasSudo && <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] text-[var(--c-amber)]">sudo</span>}
+                        {c.hasContainerRuntime && <span className="rounded-full border border-blue-500/30 bg-blue-500/10 px-2 py-0.5 text-[10px] text-[var(--c-blue)]">docker</span>}
+                        {!c.hasSudo && !c.hasContainerRuntime && <span className="text-[var(--text-muted)]">su only</span>}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 text-[var(--text-muted)]">{formatDate(c.addedAt)}</td>
+                    <td className="px-3 py-2 text-[var(--text-muted)]">{c.createdBy || '—'}</td>
+                    <td className="px-3 py-2 text-right">
+                      {confirmRemove === c.collaboratorUsername ? (
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            onClick={() => handleRemove(c.collaboratorUsername)}
+                            disabled={removingUser === c.collaboratorUsername}
+                            className="rounded bg-red-600 px-2 py-1 text-[10px] text-white hover:bg-red-700 transition-colors disabled:opacity-50"
+                          >
+                            {removingUser === c.collaboratorUsername ? <Loader2 size={10} className="animate-spin" /> : 'Confirm'}
+                          </button>
+                          <button
+                            onClick={() => setConfirmRemove(null)}
+                            className="rounded border border-[var(--border)] px-2 py-1 text-[10px] text-[var(--text-secondary)] hover:bg-[var(--surface-2)] transition-colors"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setConfirmRemove(c.collaboratorUsername)}
+                          className="rounded p-1 text-[var(--text-muted)] hover:text-[var(--c-red)] hover:bg-red-500/10 transition-colors"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
 
-          <Divider />
+        <div className="border-t border-[var(--border-subtle)]" />
 
-          {/* Add collaborator form */}
-          <Box>
-            <Typography variant="subtitle2" gutterBottom>
-              Add Collaborator
-            </Typography>
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-              <TextField
-                label="Username"
-                value={newUsername}
-                onChange={(e) => setNewUsername(e.target.value)}
-                placeholder="e.g., bob"
-                size="small"
-                disabled={adding}
-              />
-              <TextField
-                label="SSH Public Key"
-                value={newSSHKey}
-                onChange={(e) => setNewSSHKey(e.target.value)}
-                placeholder="ssh-ed25519 AAAA..."
-                size="small"
-                multiline
-                rows={2}
-                disabled={adding}
-              />
-              <Box sx={{ display: 'flex', gap: 2 }}>
-                <FormControlLabel
-                  control={
-                    <Checkbox
-                      checked={grantSudo}
-                      onChange={(e) => setGrantSudo(e.target.checked)}
-                      size="small"
-                      disabled={adding}
-                    />
-                  }
-                  label="Grant full sudo"
-                />
-                <FormControlLabel
-                  control={
-                    <Checkbox
-                      checked={grantContainerRuntime}
-                      onChange={(e) => setGrantContainerRuntime(e.target.checked)}
-                      size="small"
-                      disabled={adding}
-                    />
-                  }
-                  label="Container runtime (docker)"
-                />
-              </Box>
-              <Box>
-                <Button
-                  variant="contained"
-                  startIcon={adding ? <CircularProgress size={16} /> : <PersonAddIcon />}
-                  onClick={handleAdd}
-                  disabled={adding || !newUsername.trim() || !newSSHKey.trim()}
-                >
-                  {adding ? 'Adding...' : 'Add'}
-                </Button>
-              </Box>
-            </Box>
-          </Box>
-        </Box>
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={handleClose} disabled={adding}>
-          Close
-        </Button>
-      </DialogActions>
-    </Dialog>
+        {/* Add form */}
+        <div>
+          <p className="mb-3 text-xs font-semibold text-[var(--text-secondary)]">Add Collaborator</p>
+          <div className="flex flex-col gap-3">
+            <FormField label="Username">
+              <Input value={newUsername} onChange={e => setNewUsername(e.target.value)} placeholder="bob" disabled={adding} />
+            </FormField>
+            <FormField label="SSH Public Key">
+              <Textarea value={newSSHKey} onChange={e => setNewSSHKey(e.target.value)} placeholder="ssh-ed25519 AAAA..." rows={2} disabled={adding} />
+            </FormField>
+            <div className="flex gap-4">
+              <label className="flex items-center gap-2 text-xs text-[var(--text-secondary)] cursor-pointer">
+                <input type="checkbox" checked={grantSudo} onChange={e => setGrantSudo(e.target.checked)} disabled={adding} className="accent-[var(--accent)]" />
+                Grant full sudo
+              </label>
+              <label className="flex items-center gap-2 text-xs text-[var(--text-secondary)] cursor-pointer">
+                <input type="checkbox" checked={grantContainerRuntime} onChange={e => setGrantContainerRuntime(e.target.checked)} disabled={adding} className="accent-[var(--accent)]" />
+                Container runtime (docker)
+              </label>
+            </div>
+            <div>
+              <button
+                onClick={handleAdd}
+                disabled={adding || !newUsername.trim() || !newSSHKey.trim()}
+                className="flex items-center gap-1.5 rounded-md bg-[var(--accent)] px-3.5 py-2 text-xs font-medium text-white hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50"
+              >
+                {adding ? <Loader2 size={13} className="animate-spin" /> : <UserPlus size={13} />}
+                {adding ? 'Adding…' : 'Add'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Modal>
   );
 }

@@ -1,19 +1,5 @@
 'use client';
 
-import React from 'react';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Paper,
-  Chip,
-  Typography,
-  Box,
-  Tooltip,
-} from '@mui/material';
 import { Connection, formatBytes, formatDuration, getProtocolLabel, getStateLabel } from '@/src/types/traffic';
 
 interface ConnectionsTableProps {
@@ -21,136 +7,69 @@ interface ConnectionsTableProps {
   isLoading?: boolean;
 }
 
-/**
- * Get chip color for protocol
- */
-function getProtocolColor(protocol: string): 'primary' | 'secondary' | 'default' {
+function protocolBadge(protocol: string) {
   switch (protocol) {
-    case 'TCP':
-      return 'primary';
-    case 'UDP':
-      return 'secondary';
-    default:
-      return 'default';
+    case 'TCP': return 'border-blue-500/30 bg-blue-500/10 text-[var(--c-blue)]';
+    case 'UDP': return 'border-violet-500/30 bg-violet-500/10 text-[var(--c-violet)]';
+    default:    return 'border-zinc-500/30 bg-zinc-500/10 text-zinc-400';
   }
 }
 
-/**
- * Get chip color for connection state
- */
-function getStateColor(state: string): 'success' | 'warning' | 'error' | 'default' {
+function stateBadge(state: string) {
   switch (state) {
-    case 'ESTABLISHED':
-      return 'success';
-    case 'SYN_SENT':
-    case 'SYN_RECV':
-    case 'NEW':
-      return 'warning';
-    case 'TIME_WAIT':
-    case 'CLOSE_WAIT':
-    case 'FIN_WAIT':
-    case 'CLOSED':
-      return 'error';
-    default:
-      return 'default';
+    case 'ESTABLISHED': return 'border-emerald-500/30 bg-emerald-500/10 text-[var(--c-emerald)]';
+    case 'SYN_SENT': case 'SYN_RECV': case 'NEW': return 'border-amber-500/30 bg-amber-500/10 text-[var(--c-amber)]';
+    case 'TIME_WAIT': case 'CLOSE_WAIT': case 'FIN_WAIT': case 'CLOSED': return 'border-red-500/30 bg-red-500/10 text-[var(--c-red)]';
+    default: return 'border-zinc-500/30 bg-zinc-500/10 text-zinc-400';
   }
 }
 
-/**
- * Calculate connection duration from timestamps
- */
-function getConnectionDuration(firstSeen: string, lastSeen: string): number {
-  const start = new Date(firstSeen).getTime();
-  const end = new Date(lastSeen).getTime();
-  return Math.floor((end - start) / 1000);
+function duration(firstSeen: string, lastSeen: string) {
+  return Math.floor((new Date(lastSeen).getTime() - new Date(firstSeen).getTime()) / 1000);
 }
 
 export default function ConnectionsTable({ connections, isLoading }: ConnectionsTableProps) {
   if (isLoading) {
-    return (
-      <Box sx={{ p: 3, textAlign: 'center' }}>
-        <Typography color="text.secondary">Loading connections...</Typography>
-      </Box>
-    );
+    return <p className="py-6 text-center text-xs text-[var(--text-muted)]">Loading connections…</p>;
   }
-
   if (connections.length === 0) {
-    return (
-      <Box sx={{ p: 3, textAlign: 'center' }}>
-        <Typography color="text.secondary">No active connections</Typography>
-      </Box>
-    );
+    return <p className="py-6 text-center text-xs text-[var(--text-muted)]">No active connections</p>;
   }
 
   return (
-    <TableContainer component={Paper} variant="outlined">
-      <Table size="small">
-        <TableHead>
-          <TableRow>
-            <TableCell>Protocol</TableCell>
-            <TableCell>Destination</TableCell>
-            <TableCell>Port</TableCell>
-            <TableCell>State</TableCell>
-            <TableCell align="right">Sent</TableCell>
-            <TableCell align="right">Received</TableCell>
-            <TableCell align="right">Duration</TableCell>
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {connections.map((conn) => (
-            <TableRow
-              key={conn.id}
-              sx={{ '&:last-child td, &:last-child th': { border: 0 } }}
-              hover
-            >
-              <TableCell>
-                <Chip
-                  label={getProtocolLabel(conn.protocol)}
-                  size="small"
-                  color={getProtocolColor(conn.protocol)}
-                  variant="outlined"
-                />
-              </TableCell>
-              <TableCell>
-                <Tooltip title={`Source: ${conn.sourceIp}:${conn.sourcePort}`}>
-                  <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
-                    {conn.destIp}
-                  </Typography>
-                </Tooltip>
-              </TableCell>
-              <TableCell>
-                <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
-                  {conn.destPort}
-                </Typography>
-              </TableCell>
-              <TableCell>
-                <Chip
-                  label={getStateLabel(conn.state)}
-                  size="small"
-                  color={getStateColor(conn.state)}
-                  variant="filled"
-                  sx={{ fontSize: '0.7rem' }}
-                />
-              </TableCell>
-              <TableCell align="right">
-                <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
-                  {formatBytes(conn.bytesSent)}
-                </Typography>
-              </TableCell>
-              <TableCell align="right">
-                <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
-                  {formatBytes(conn.bytesReceived)}
-                </Typography>
-              </TableCell>
-              <TableCell align="right">
-                <Typography variant="body2" color="text.secondary">
-                  {formatDuration(getConnectionDuration(conn.firstSeen, conn.lastSeen))}
-                </Typography>
-              </TableCell>
-            </TableRow>
+    <div className="overflow-x-auto rounded-xl border border-[var(--border-subtle)]">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="border-b border-[var(--border-subtle)] bg-[var(--surface)]">
+            {['Protocol', 'Destination', 'Port', 'State', 'Sent', 'Received', 'Duration'].map((h, i) => (
+              <th key={h} className={`px-3 py-2.5 font-medium text-[var(--text-secondary)] ${i >= 4 ? 'text-right' : 'text-left'}`}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {connections.map(conn => (
+            <tr key={conn.id} className="border-b border-[var(--border-subtle)] transition-colors hover:bg-[var(--surface)] last:border-0">
+              <td className="px-3 py-2.5">
+                <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${protocolBadge(conn.protocol)}`}>
+                  {getProtocolLabel(conn.protocol)}
+                </span>
+              </td>
+              <td className="px-3 py-2.5 font-mono text-[var(--text-secondary)]" title={`Source: ${conn.sourceIp}:${conn.sourcePort}`}>
+                {conn.destIp}
+              </td>
+              <td className="px-3 py-2.5 font-mono text-[var(--text-secondary)]">{conn.destPort}</td>
+              <td className="px-3 py-2.5">
+                <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${stateBadge(conn.state)}`}>
+                  {getStateLabel(conn.state)}
+                </span>
+              </td>
+              <td className="px-3 py-2.5 text-right font-mono text-[var(--text-secondary)]">{formatBytes(conn.bytesSent)}</td>
+              <td className="px-3 py-2.5 text-right font-mono text-[var(--text-secondary)]">{formatBytes(conn.bytesReceived)}</td>
+              <td className="px-3 py-2.5 text-right text-[var(--text-muted)]">{formatDuration(duration(conn.firstSeen, conn.lastSeen))}</td>
+            </tr>
           ))}
-        </TableBody>
-      </Table>
-    </TableContainer>
+        </tbody>
+      </table>
+    </div>
   );
 }

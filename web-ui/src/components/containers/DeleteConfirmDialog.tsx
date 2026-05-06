@@ -1,15 +1,8 @@
 'use client';
 
-import {
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  Button,
-  Typography,
-  CircularProgress,
-} from '@mui/material';
 import { useState } from 'react';
+import { Loader2, Trash2 } from 'lucide-react';
+import { Modal, ModalBtn } from '@/src/components/ui/Modal';
 
 interface DeleteConfirmDialogProps {
   open: boolean;
@@ -18,12 +11,7 @@ interface DeleteConfirmDialogProps {
   onConfirm: () => Promise<void>;
 }
 
-export default function DeleteConfirmDialog({
-  open,
-  containerName,
-  onClose,
-  onConfirm,
-}: DeleteConfirmDialogProps) {
+export default function DeleteConfirmDialog({ open, containerName, onClose, onConfirm }: DeleteConfirmDialogProps) {
   const [deleting, setDeleting] = useState(false);
 
   const handleConfirm = async () => {
@@ -37,30 +25,27 @@ export default function DeleteConfirmDialog({
   };
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
-      <DialogTitle>Delete Container</DialogTitle>
-      <DialogContent>
-        <Typography>
-          Are you sure you want to delete container <strong>{containerName}</strong>?
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          This action cannot be undone. All data in the container will be lost.
-        </Typography>
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={onClose} disabled={deleting}>
-          Cancel
-        </Button>
-        <Button
-          variant="contained"
-          color="error"
-          onClick={handleConfirm}
-          disabled={deleting}
-        >
-          {deleting ? <CircularProgress size={20} sx={{ mr: 1 }} /> : null}
-          Delete
-        </Button>
-      </DialogActions>
-    </Dialog>
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Delete Container"
+      size="sm"
+      footer={
+        <>
+          <ModalBtn onClick={onClose} disabled={deleting}>Cancel</ModalBtn>
+          <ModalBtn variant="danger" onClick={handleConfirm} disabled={deleting}>
+            {deleting ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+            Delete
+          </ModalBtn>
+        </>
+      }
+    >
+      <p className="text-sm text-[var(--text)]">
+        Are you sure you want to delete container <strong className="text-[var(--text)]">{containerName}</strong>?
+      </p>
+      <p className="mt-2 text-xs text-[var(--text-muted)]">
+        This action cannot be undone. All data in the container will be lost.
+      </p>
+    </Modal>
   );
 }

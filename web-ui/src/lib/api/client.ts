@@ -1352,8 +1352,14 @@ export class ContaineriumClient {
 }
 
 /**
- * Create a client instance for a server
+ * Create a client instance for a server.
+ * Returns a DemoClient for the special '__demo__' endpoint.
  */
 export function getClient(server: Server): ContaineriumClient {
+  if (server.endpoint === '__demo__') {
+    // Lazy import to avoid bundling demo data in production
+    const { DemoClient } = require('@/src/lib/demo/DemoClient');
+    return new DemoClient();
+  }
   return new ContaineriumClient(server);
 }

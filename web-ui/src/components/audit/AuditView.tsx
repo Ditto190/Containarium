@@ -1,44 +1,16 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import {
-  Box,
-  Typography,
-  IconButton,
-  Paper,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  TablePagination,
-  Chip,
-  TextField,
-  Stack,
-  MenuItem,
-  Select,
-  FormControl,
-  InputLabel,
-  CircularProgress,
-  Alert,
-} from '@mui/material';
-import RefreshIcon from '@mui/icons-material/Refresh';
+import { RefreshCw, Loader2 } from 'lucide-react';
 import { Server } from '@/src/types/server';
 import { AuditLogsParams } from '@/src/types/audit';
 import { useAudit } from '@/src/lib/hooks/useAudit';
 
-interface AuditViewProps {
-  server: Server;
-}
+interface AuditViewProps { server: Server; }
 
 function formatDate(iso: string): string {
-  if (!iso) return '-';
-  try {
-    return new Date(iso).toLocaleString();
-  } catch {
-    return iso;
-  }
+  if (!iso) return '—';
+  try { return new Date(iso).toLocaleString(); } catch { return iso; }
 }
 
 const ACTION_OPTIONS = [
@@ -67,75 +39,28 @@ const RESOURCE_TYPE_OPTIONS = [
   { value: 'api', label: 'API' },
 ];
 
-// Method-specific colors for API actions
-const METHOD_STYLES: Record<string, { label: string; bg: string; color: string }> = {
-  api_get:    { label: 'GET',    bg: '#e8f5e9', color: '#2e7d32' },
-  api_post:   { label: 'POST',   bg: '#e3f2fd', color: '#1565c0' },
-  api_put:    { label: 'PUT',    bg: '#fff3e0', color: '#e65100' },
-  api_delete: { label: 'DELETE', bg: '#ffebee', color: '#c62828' },
-  api_patch:  { label: 'PATCH',  bg: '#f3e5f5', color: '#7b1fa2' },
+const METHOD_BADGE: Record<string, string> = {
+  api_get:    'border-emerald-500/30 bg-emerald-500/10 text-[var(--c-emerald)]',
+  api_post:   'border-blue-500/30 bg-blue-500/10 text-[var(--c-blue)]',
+  api_put:    'border-amber-500/30 bg-amber-500/10 text-[var(--c-amber)]',
+  api_delete: 'border-red-500/30 bg-red-500/10 text-[var(--c-red)]',
+  api_patch:  'border-violet-500/30 bg-violet-500/10 text-[var(--c-violet)]',
 };
+const METHOD_LABEL: Record<string, string> = { api_get: 'GET', api_post: 'POST', api_put: 'PUT', api_delete: 'DELETE', api_patch: 'PATCH' };
 
-function ActionChip({ action }: { action: string }) {
-  // SSH login
-  if (action === 'ssh_login') {
-    return <Chip label="SSH Login" color="info" size="small" />;
-  }
-
-  // Terminal access
-  if (action === 'terminal_access') {
-    return <Chip label="Terminal" color="secondary" size="small" />;
-  }
-
-  // HTTP method-specific chips
-  const methodStyle = METHOD_STYLES[action];
-  if (methodStyle) {
-    return (
-      <Chip
-        label={methodStyle.label}
-        size="small"
-        sx={{
-          bgcolor: methodStyle.bg,
-          color: methodStyle.color,
-          fontWeight: 'bold',
-          border: `1px solid ${methodStyle.color}40`,
-        }}
-      />
-    );
-  }
-
-  // Legacy api_request (before the method split) — try to infer method from resourceId
-  if (action === 'api_request') {
-    return <Chip label="API" size="small" variant="outlined" />;
-  }
-
-  // Also handle if action is still the generic form but with method embedded
-  if (action.startsWith('api_')) {
-    const method = action.replace('api_', '').toUpperCase();
-    return (
-      <Chip
-        label={method}
-        size="small"
-        sx={{ bgcolor: '#f5f5f5', color: '#616161', fontWeight: 'bold', border: '1px solid #bdbdbd' }}
-      />
-    );
-  }
-
-  // Event bus events
+function ActionBadge({ action }: { action: string }) {
+  if (action === 'ssh_login') return <span className="rounded-full border border-blue-500/30 bg-blue-500/10 px-2 py-0.5 text-[10px] text-[var(--c-blue)]">SSH Login</span>;
+  if (action === 'terminal_access') return <span className="rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[10px] text-[var(--c-violet)]">Terminal</span>;
+  if (METHOD_BADGE[action]) return <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${METHOD_BADGE[action]}`}>{METHOD_LABEL[action]}</span>;
+  if (action.startsWith('api_')) return <span className="rounded-full border border-zinc-600 bg-zinc-600/10 px-2 py-0.5 text-[10px] font-bold text-zinc-400">{action.replace('api_', '').toUpperCase()}</span>;
   if (action.startsWith('EVENT_TYPE_')) {
-    const label = action
-      .replace('EVENT_TYPE_', '')
-      .split('_')
-      .map(w => w.charAt(0) + w.slice(1).toLowerCase())
-      .join(' ');
-    return <Chip label={label} color="success" size="small" variant="outlined" />;
+    const label = action.replace('EVENT_TYPE_', '').split('_').map(w => w.charAt(0) + w.slice(1).toLowerCase()).join(' ');
+    return <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-[var(--c-emerald)]">{label}</span>;
   }
-
-  return <Chip label={action} size="small" variant="outlined" />;
+  return <span className="rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-2 py-0.5 text-[10px] text-[var(--text-secondary)]">{action}</span>;
 }
 
 export default function AuditView({ server }: AuditViewProps) {
-  // Filter state
   const [username, setUsername] = useState('');
   const [action, setAction] = useState('');
   const [resourceType, setResourceType] = useState('');
@@ -156,165 +81,118 @@ export default function AuditView({ server }: AuditViewProps) {
 
   const { logs, totalCount, isLoading, error, refresh } = useAudit(server, params);
 
-  const handleChangePage = useCallback((_: unknown, newPage: number) => {
-    setPage(newPage);
-  }, []);
+  const totalPages = Math.ceil(totalCount / rowsPerPage);
 
-  const handleChangeRowsPerPage = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
-    setRowsPerPage(parseInt(event.target.value, 10));
-    setPage(0);
-  }, []);
+  const handlePageChange = useCallback((newPage: number) => { setPage(newPage); }, []);
+
+  const filterInput = 'w-full rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] px-3 py-1.5 text-xs text-[var(--text)] placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:outline-none';
+  const filterSelect = 'w-full appearance-none rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] px-3 py-1.5 text-xs text-[var(--text)] focus:border-[var(--accent)] focus:outline-none';
 
   return (
-    <Box sx={{ p: 3 }}>
+    <div className="p-6">
       {/* Header */}
-      <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h5" sx={{ flexGrow: 1 }}>
-          Audit Logs
-        </Typography>
-        <IconButton onClick={refresh} disabled={isLoading}>
-          <RefreshIcon />
-        </IconButton>
-      </Box>
+      <div className="mb-6 flex items-center gap-3">
+        <h1 className="mr-auto text-base font-semibold text-[var(--text)]">Audit Logs</h1>
+        <button onClick={refresh} disabled={isLoading} className="flex items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--surface)] px-3 py-1.5 text-xs text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-2)] disabled:opacity-50">
+          <RefreshCw size={12} className={isLoading ? 'animate-spin' : ''} />
+          Refresh
+        </button>
+      </div>
 
       {error && (
-        <Alert severity="error" sx={{ mb: 2 }}>
+        <div className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-[var(--c-red)]">
           Failed to load audit logs: {(error as Error).message}
-        </Alert>
+        </div>
       )}
 
       {/* Filters */}
-      <Paper sx={{ p: 2, mb: 3 }}>
-        <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
-          <TextField
-            label="Username"
-            size="small"
-            value={username}
-            onChange={e => { setUsername(e.target.value); setPage(0); }}
-            sx={{ minWidth: 140 }}
-          />
-          <FormControl size="small" sx={{ minWidth: 180 }}>
-            <InputLabel>Action</InputLabel>
-            <Select
-              value={action}
-              label="Action"
-              onChange={e => { setAction(e.target.value); setPage(0); }}
-            >
-              {ACTION_OPTIONS.map(opt => (
-                <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-          <FormControl size="small" sx={{ minWidth: 150 }}>
-            <InputLabel>Resource Type</InputLabel>
-            <Select
-              value={resourceType}
-              label="Resource Type"
-              onChange={e => { setResourceType(e.target.value); setPage(0); }}
-            >
-              {RESOURCE_TYPE_OPTIONS.map(opt => (
-                <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-          <TextField
-            label="From"
-            type="datetime-local"
-            size="small"
-            value={fromDate}
-            onChange={e => { setFromDate(e.target.value); setPage(0); }}
-            slotProps={{ inputLabel: { shrink: true } }}
-            sx={{ minWidth: 200 }}
-          />
-          <TextField
-            label="To"
-            type="datetime-local"
-            size="small"
-            value={toDate}
-            onChange={e => { setToDate(e.target.value); setPage(0); }}
-            slotProps={{ inputLabel: { shrink: true } }}
-            sx={{ minWidth: 200 }}
-          />
-        </Stack>
-      </Paper>
+      <div className="mb-4 flex flex-wrap gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--surface)] p-4">
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] font-medium text-[var(--text-muted)]">Username</label>
+          <input type="text" value={username} onChange={e => { setUsername(e.target.value); setPage(0); }} placeholder="Filter by username" className={filterInput} style={{ width: 140 }} />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] font-medium text-[var(--text-muted)]">Action</label>
+          <select value={action} onChange={e => { setAction(e.target.value); setPage(0); }} className={filterSelect} style={{ width: 180 }}>
+            {ACTION_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] font-medium text-[var(--text-muted)]">Resource Type</label>
+          <select value={resourceType} onChange={e => { setResourceType(e.target.value); setPage(0); }} className={filterSelect} style={{ width: 150 }}>
+            {RESOURCE_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] font-medium text-[var(--text-muted)]">From</label>
+          <input type="datetime-local" value={fromDate} onChange={e => { setFromDate(e.target.value); setPage(0); }} className={filterInput} style={{ width: 200 }} />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] font-medium text-[var(--text-muted)]">To</label>
+          <input type="datetime-local" value={toDate} onChange={e => { setToDate(e.target.value); setPage(0); }} className={filterInput} style={{ width: 200 }} />
+        </div>
+      </div>
 
       {/* Table */}
-      <TableContainer component={Paper}>
+      <div className="overflow-x-auto rounded-xl border border-[var(--border-subtle)]">
         {isLoading && (
-          <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
-            <CircularProgress size={24} />
-          </Box>
+          <div className="flex justify-center border-b border-[var(--border-subtle)] p-3">
+            <Loader2 size={16} className="animate-spin text-[var(--text-secondary)]" />
+          </div>
         )}
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Timestamp</TableCell>
-              <TableCell>Username</TableCell>
-              <TableCell>Action</TableCell>
-              <TableCell>Resource</TableCell>
-              <TableCell>Detail</TableCell>
-              <TableCell>Source IP</TableCell>
-              <TableCell>Status</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-[var(--border-subtle)] bg-[var(--surface)]">
+              {['Timestamp', 'Username', 'Action', 'Resource', 'Detail', 'Source IP', 'Status'].map(h => (
+                <th key={h} className="px-3 py-2.5 text-left font-medium text-[var(--text-secondary)] whitespace-nowrap">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
             {logs.length === 0 && !isLoading ? (
-              <TableRow>
-                <TableCell colSpan={7} align="center">
-                  <Typography variant="body2" color="text.secondary" sx={{ py: 3 }}>
-                    No audit log entries found
-                  </Typography>
-                </TableCell>
-              </TableRow>
+              <tr>
+                <td colSpan={7} className="py-10 text-center text-[var(--text-muted)]">No audit log entries found</td>
+              </tr>
             ) : (
               logs.map(entry => (
-                <TableRow key={entry.id} hover>
-                  <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                    {formatDate(entry.timestamp)}
-                  </TableCell>
-                  <TableCell>{entry.username || '-'}</TableCell>
-                  <TableCell>
-                    <ActionChip action={entry.action} />
-                  </TableCell>
-                  <TableCell>
+                <tr key={entry.id} className="border-b border-[var(--border-subtle)] transition-colors hover:bg-[var(--surface)] last:border-0">
+                  <td className="px-3 py-2 whitespace-nowrap text-[var(--text-muted)]">{formatDate(entry.timestamp)}</td>
+                  <td className="px-3 py-2 text-[var(--text-secondary)]">{entry.username || '—'}</td>
+                  <td className="px-3 py-2"><ActionBadge action={entry.action} /></td>
+                  <td className="px-3 py-2">
                     {entry.resourceType === 'api' ? (
-                      // For API entries, resourceId is "PUT /v1/..." — show just the path
-                      <Typography variant="body2" component="span" sx={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>
-                        {entry.resourceId.replace(/^(GET|POST|PUT|DELETE|PATCH)\s+/, '') || '-'}
-                      </Typography>
+                      <span className="font-mono text-[var(--text-secondary)]">{entry.resourceId.replace(/^(GET|POST|PUT|DELETE|PATCH)\s+/, '') || '—'}</span>
                     ) : (
-                      <>
-                        {entry.resourceType && (
-                          <Typography variant="body2" component="span" color="text.secondary">
-                            {entry.resourceType}/
-                          </Typography>
-                        )}
-                        {entry.resourceId || '-'}
-                      </>
+                      <span className="text-[var(--text-secondary)]">
+                        {entry.resourceType && <span className="text-[var(--text-muted)]">{entry.resourceType}/</span>}
+                        {entry.resourceId || '—'}
+                      </span>
                     )}
-                  </TableCell>
-                  <TableCell sx={{ maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {entry.detail || '-'}
-                  </TableCell>
-                  <TableCell>{entry.sourceIp || '-'}</TableCell>
-                  <TableCell>
-                    {entry.statusCode > 0 ? entry.statusCode : '-'}
-                  </TableCell>
-                </TableRow>
+                  </td>
+                  <td className="px-3 py-2 max-w-[250px] truncate text-[var(--text-muted)]" title={entry.detail}>{entry.detail || '—'}</td>
+                  <td className="px-3 py-2 font-mono text-[var(--text-muted)]">{entry.sourceIp || '—'}</td>
+                  <td className="px-3 py-2 text-[var(--text-muted)]">{entry.statusCode > 0 ? entry.statusCode : '—'}</td>
+                </tr>
               ))
             )}
-          </TableBody>
-        </Table>
-        <TablePagination
-          component="div"
-          count={totalCount}
-          page={page}
-          onPageChange={handleChangePage}
-          rowsPerPage={rowsPerPage}
-          onRowsPerPageChange={handleChangeRowsPerPage}
-          rowsPerPageOptions={[25, 50, 100]}
-        />
-      </TableContainer>
-    </Box>
+          </tbody>
+        </table>
+
+        {/* Pagination */}
+        <div className="flex items-center justify-between border-t border-[var(--border-subtle)] px-4 py-2">
+          <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
+            <span>Rows per page:</span>
+            <select value={rowsPerPage} onChange={e => { setRowsPerPage(parseInt(e.target.value)); setPage(0); }} className="rounded border border-[var(--border-subtle)] bg-[var(--surface-2)] px-2 py-0.5 text-xs text-[var(--text)] focus:outline-none">
+              {[25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </div>
+          <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
+            <span>{page * rowsPerPage + 1}–{Math.min((page + 1) * rowsPerPage, totalCount)} of {totalCount}</span>
+            <button onClick={() => handlePageChange(page - 1)} disabled={page === 0} className="rounded px-2 py-1 hover:bg-[var(--surface-2)] disabled:opacity-40 transition-colors">‹</button>
+            <button onClick={() => handlePageChange(page + 1)} disabled={page >= totalPages - 1} className="rounded px-2 py-1 hover:bg-[var(--surface-2)] disabled:opacity-40 transition-colors">›</button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

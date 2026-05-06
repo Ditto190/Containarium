@@ -1,26 +1,9 @@
 'use client';
 
 import {
-  Card,
-  CardContent,
-  Typography,
-  Chip,
-  Box,
-  IconButton,
-  Tooltip,
-  LinearProgress,
-} from '@mui/material';
-import DeleteIcon from '@mui/icons-material/Delete';
-import PlayArrowIcon from '@mui/icons-material/PlayArrow';
-import StopIcon from '@mui/icons-material/Stop';
-import TerminalIcon from '@mui/icons-material/Terminal';
-import DesktopWindowsIcon from '@mui/icons-material/DesktopWindows';
-import MemoryIcon from '@mui/icons-material/Memory';
-import StorageIcon from '@mui/icons-material/Storage';
-import DnsIcon from '@mui/icons-material/Dns';
-import SecurityIcon from '@mui/icons-material/Security';
-import LabelIcon from '@mui/icons-material/Label';
-import TuneIcon from '@mui/icons-material/Tune';
+  Trash2, Play, Square, Terminal, Monitor,
+  Shield, Tag, SlidersHorizontal, Network,
+} from 'lucide-react';
 import { Container, ContainerState, ContainerMetricsWithRate } from '@/src/types/container';
 
 interface ContainerNodeProps {
@@ -35,336 +18,192 @@ interface ContainerNodeProps {
   onResize?: (username: string) => void;
 }
 
-/**
- * Parse a size string like "4GB", "512MB", "50G" to bytes
- */
-function parseSize(sizeStr: string): number {
-  if (!sizeStr) return 0;
-  const match = sizeStr.match(/^([\d.]+)\s*(B|KB|MB|GB|TB|K|M|G|T)?$/i);
-  if (!match) return 0;
-  const value = parseFloat(match[1]);
-  const unit = (match[2] || 'B').toUpperCase();
-  const multipliers: Record<string, number> = {
-    'B': 1,
-    'K': 1024,
-    'KB': 1024,
-    'M': 1024 * 1024,
-    'MB': 1024 * 1024,
-    'G': 1024 * 1024 * 1024,
-    'GB': 1024 * 1024 * 1024,
-    'T': 1024 * 1024 * 1024 * 1024,
-    'TB': 1024 * 1024 * 1024 * 1024,
-  };
-  return value * (multipliers[unit] || 1);
+function parseSize(s: string): number {
+  if (!s) return 0;
+  const m = s.match(/^([\d.]+)\s*(B|KB|MB|GB|TB|K|M|G|T)?$/i);
+  if (!m) return 0;
+  const v = parseFloat(m[1]);
+  const u = (m[2] || 'B').toUpperCase();
+  const mul: Record<string, number> = { B: 1, K: 1024, KB: 1024, M: 1048576, MB: 1048576, G: 1073741824, GB: 1073741824, T: 1099511627776, TB: 1099511627776 };
+  return v * (mul[u] || 1);
 }
 
-/**
- * Format bytes to human readable string
- */
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+function formatBytes(b: number): string {
+  if (b === 0) return '0 B';
+  const k = 1024, sz = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(b) / Math.log(k));
+  return parseFloat((b / Math.pow(k, i)).toFixed(1)) + ' ' + sz[i];
 }
 
-/**
- * Format CPU seconds to readable string
- */
-function formatCpuTime(seconds: number): string {
-  if (seconds < 60) return seconds.toFixed(1) + 's';
-  if (seconds < 3600) return (seconds / 60).toFixed(1) + 'm';
-  return (seconds / 3600).toFixed(1) + 'h';
-}
-
-function getStateColor(state: ContainerState): 'success' | 'error' | 'warning' | 'default' {
+function stateBadge(state: ContainerState) {
   switch (state) {
-    case 'Running':
-      return 'success';
-    case 'Stopped':
-      return 'error';
+    case 'Running':     return 'bg-emerald-500/15 text-[var(--c-emerald)] border-emerald-500/30';
+    case 'Stopped':     return 'bg-red-500/15 text-[var(--c-red)] border-red-500/30';
     case 'Frozen':
     case 'Creating':
-    case 'Provisioning':
-      return 'warning';
-    default:
-      return 'default';
+    case 'Provisioning': return 'bg-amber-500/15 text-[var(--c-amber)] border-amber-500/30';
+    default:            return 'bg-zinc-500/15 text-zinc-400 border-zinc-500/30';
   }
+}
+
+function UsageBar({ used, total, color }: { used: number; total: number; color: string }) {
+  const pct = total > 0 ? Math.min((used / total) * 100, 100) : 0;
+  return (
+    <div className="h-1 w-full rounded-full bg-zinc-800 overflow-hidden">
+      <div className={`h-full rounded-full transition-all ${color}`} style={{ width: `${pct}%` }} />
+    </div>
+  );
+}
+
+function barColor(pct: number) {
+  if (pct > 80) return 'bg-red-500';
+  if (pct > 60) return 'bg-amber-500';
+  return 'bg-emerald-500';
+}
+
+function IconBtn({ title, onClick, className = '', children }: { title: string; onClick: () => void; className?: string; children: React.ReactNode }) {
+  return (
+    <button
+      title={title}
+      onClick={onClick}
+      className={`rounded p-1 text-[var(--text-muted)] transition-colors hover:text-[var(--text)] hover:bg-[var(--surface-2)] ${className}`}
+    >
+      {children}
+    </button>
+  );
 }
 
 export default function ContainerNode({ container, metrics, onDelete, onStart, onStop, onTerminal, onEditFirewall, onEditLabels, onResize }: ContainerNodeProps) {
   const isRunning = container.state === 'Running';
+  const username = container.username || container.name;
 
-  // Calculate CPU, memory and disk utilization
   const cpuCores = parseInt(container.cpu) || 0;
-  const cpuMaxPercent = cpuCores * 100; // 4 cores = 400% max
-  const cpuUsagePercent = metrics?.cpuUsagePercent || 0;
-  const cpuNormalized = cpuMaxPercent > 0 ? Math.min((cpuUsagePercent / cpuMaxPercent) * 100, 100) : 0;
+  const cpuUsagePct = metrics?.cpuUsagePercent || 0;
+  const cpuNorm = cpuCores > 0 ? Math.min((cpuUsagePct / (cpuCores * 100)) * 100, 100) : 0;
 
-  const memoryLimit = parseSize(container.memory);
+  const memLimit = parseSize(container.memory);
   const diskLimit = parseSize(container.disk);
-  const memoryUsed = metrics?.memoryUsageBytes || 0;
+  const memUsed = metrics?.memoryUsageBytes || 0;
   const diskUsed = metrics?.diskUsageBytes || 0;
-  const memoryPercent = memoryLimit > 0 ? Math.min((memoryUsed / memoryLimit) * 100, 100) : 0;
-  const diskPercent = diskLimit > 0 ? Math.min((diskUsed / diskLimit) * 100, 100) : 0;
+  const memPct = memLimit > 0 ? Math.min((memUsed / memLimit) * 100, 100) : 0;
+  const diskPct = diskLimit > 0 ? Math.min((diskUsed / diskLimit) * 100, 100) : 0;
 
   return (
-    <Card
-      sx={{
-        minWidth: 300,
-        position: 'relative',
-        '&:hover': {
-          boxShadow: 4,
-        },
-      }}
-    >
-      <CardContent>
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1 }}>
-          <Typography variant="h6" component="div" noWrap sx={{ maxWidth: '70%' }}>
-            {container.username || container.name}
-          </Typography>
-          <Chip
-            label={container.state}
-            color={getStateColor(container.state)}
-            size="small"
-          />
-        </Box>
+    <div className="flex flex-col gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--surface)] p-4 shadow-sm transition-shadow hover:shadow-md hover:border-[var(--border)]">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold text-[var(--text)]">{username}</p>
+          <p className="truncate text-xs text-[var(--text-muted)]">{container.image || 'ubuntu:24.04'}</p>
+        </div>
+        <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium ${stateBadge(container.state)}`}>
+          {container.state}
+        </span>
+      </div>
 
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          {container.image || 'ubuntu:24.04'}
-        </Typography>
-
+      {/* IP + chips */}
+      <div className="flex flex-wrap items-center gap-1.5">
         {container.ipAddress && (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-            <DnsIcon fontSize="small" color="action" />
-            <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
-              {container.ipAddress}
-            </Typography>
-          </Box>
+          <span className="flex items-center gap-1 rounded bg-[var(--surface-2)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--text-secondary)]">
+            <Network size={10} />
+            {container.ipAddress}
+          </span>
         )}
-
-        {/* GPU and Node chips */}
-        {(container.gpu || container.backendId) && (
-          <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mb: 2 }}>
-            {container.gpu && (
-              <Chip
-                label={'GPU: ' + container.gpu}
-                size="small"
-                variant="outlined"
-                color="secondary"
-              />
-            )}
-            {container.backendId && (
-              <Chip
-                label={container.backendId}
-                size="small"
-                variant="outlined"
-                color={container.backendId.startsWith('tunnel-') ? 'secondary' : 'primary'}
-              />
-            )}
-          </Box>
+        {container.gpu && (
+          <span className="rounded border border-violet-500/30 bg-violet-500/10 px-1.5 py-0.5 text-[10px] text-[var(--c-violet)]">
+            GPU: {container.gpu}
+          </span>
         )}
-
-        {/* CPU usage progress bar */}
-        {isRunning && container.cpu && (
-          <Box sx={{ mb: 1.5 }}>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
-              <Typography variant="caption" color="text.secondary">
-                CPU
-              </Typography>
-              <Typography variant="caption" color="text.secondary">
-                {cpuUsagePercent.toFixed(1)}% / {cpuCores} cores
-              </Typography>
-            </Box>
-            <LinearProgress
-              variant="determinate"
-              value={cpuNormalized}
-              sx={{
-                height: 8,
-                borderRadius: 4,
-                bgcolor: 'grey.200',
-                '& .MuiLinearProgress-bar': {
-                  bgcolor: cpuNormalized > 80 ? 'error.main' : cpuNormalized > 60 ? 'warning.main' : 'success.main',
-                  borderRadius: 4,
-                },
-              }}
-            />
-          </Box>
+        {container.backendId && (
+          <span className={`rounded border px-1.5 py-0.5 text-[10px] ${container.backendId.startsWith('tunnel-') ? 'border-indigo-500/30 bg-indigo-500/10 text-indigo-400' : 'border-blue-500/30 bg-blue-500/10 text-[var(--c-blue)]'}`}>
+            {container.backendId}
+          </span>
         )}
+      </div>
 
-        {/* Memory usage progress bar */}
-        {isRunning && container.memory && (
-          <Box sx={{ mb: 1.5 }}>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
-              <Typography variant="caption" color="text.secondary">
-                Memory
-              </Typography>
-              <Typography variant="caption" color="text.secondary">
-                {formatBytes(memoryUsed)} / {container.memory}
-              </Typography>
-            </Box>
-            <LinearProgress
-              variant="determinate"
-              value={memoryPercent}
-              sx={{
-                height: 8,
-                borderRadius: 4,
-                bgcolor: 'grey.200',
-                '& .MuiLinearProgress-bar': {
-                  bgcolor: memoryPercent > 80 ? 'error.main' : memoryPercent > 60 ? 'warning.main' : 'primary.main',
-                  borderRadius: 4,
-                },
-              }}
-            />
-          </Box>
+      {/* Resource bars */}
+      {isRunning && (
+        <div className="flex flex-col gap-2">
+          {container.cpu && (
+            <div>
+              <div className="mb-1 flex justify-between text-[10px] text-[var(--text-muted)]">
+                <span>CPU</span>
+                <span>{cpuUsagePct.toFixed(1)}% / {cpuCores}c</span>
+              </div>
+              <UsageBar used={cpuNorm} total={100} color={barColor(cpuNorm)} />
+            </div>
+          )}
+          {container.memory && memLimit > 0 && (
+            <div>
+              <div className="mb-1 flex justify-between text-[10px] text-[var(--text-muted)]">
+                <span>Memory</span>
+                <span>{formatBytes(memUsed)} / {container.memory}</span>
+              </div>
+              <UsageBar used={memPct} total={100} color={barColor(memPct)} />
+            </div>
+          )}
+          {(diskUsed > 0 || diskLimit > 0) && (
+            <div>
+              <div className="mb-1 flex justify-between text-[10px] text-[var(--text-muted)]">
+                <span>Disk</span>
+                <span>{formatBytes(diskUsed)}{container.disk ? ` / ${container.disk}` : ' used'}</span>
+              </div>
+              <UsageBar used={diskPct || 100} total={100} color={barColor(diskPct)} />
+            </div>
+          )}
+          {metrics && (
+            <div className="flex flex-wrap gap-1">
+              <span className="rounded bg-[var(--surface-2)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)]" title="Network I/O">
+                Net: {formatBytes(metrics.networkRxBytes)}↓ {formatBytes(metrics.networkTxBytes)}↑
+              </span>
+              <span className="rounded bg-[var(--surface-2)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)]" title="Running processes">
+                {metrics.processCount} procs
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Actions */}
+      <div className="flex items-center justify-end gap-0.5 border-t border-[var(--border-subtle)] pt-2">
+        {isRunning && container.accessType === 'ACCESS_TYPE_RDP' && (
+          <IconBtn title="Remote Desktop" onClick={() => window.open('/guacamole/', '_blank')}>
+            <Monitor size={14} />
+          </IconBtn>
         )}
-
-        {/* Disk usage progress bar */}
-        {isRunning && (diskUsed > 0 || container.disk) && (
-          <Box sx={{ mb: 1.5 }}>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
-              <Typography variant="caption" color="text.secondary">
-                Disk
-              </Typography>
-              <Typography variant="caption" color="text.secondary">
-                {formatBytes(diskUsed)}{container.disk ? ` / ${container.disk}` : ' used'}
-              </Typography>
-            </Box>
-            {container.disk ? (
-              <LinearProgress
-                variant="determinate"
-                value={diskPercent}
-                sx={{
-                  height: 8,
-                  borderRadius: 4,
-                  bgcolor: 'grey.200',
-                  '& .MuiLinearProgress-bar': {
-                    bgcolor: diskPercent > 80 ? 'error.main' : diskPercent > 60 ? 'warning.main' : 'info.main',
-                    borderRadius: 4,
-                  },
-                }}
-              />
-            ) : (
-              <LinearProgress
-                variant="determinate"
-                value={100}
-                sx={{
-                  height: 8,
-                  borderRadius: 4,
-                  bgcolor: 'grey.200',
-                  '& .MuiLinearProgress-bar': {
-                    bgcolor: 'info.main',
-                    borderRadius: 4,
-                  },
-                }}
-              />
-            )}
-          </Box>
+        {isRunning && container.accessType !== 'ACCESS_TYPE_RDP' && onTerminal && (
+          <IconBtn title="Terminal" onClick={() => onTerminal(username)} className="hover:text-[var(--c-blue)]">
+            <Terminal size={14} />
+          </IconBtn>
         )}
-
-        {/* Other metrics (simple text) */}
-        {isRunning && metrics && (
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1 }}>
-            <Tooltip title="Network I/O (received / sent)">
-              <Chip
-                label={'Net: ' + formatBytes(metrics.networkRxBytes) + ' / ' + formatBytes(metrics.networkTxBytes)}
-                size="small"
-                variant="outlined"
-                sx={{ fontSize: '0.7rem' }}
-              />
-            </Tooltip>
-            <Tooltip title="Running processes">
-              <Chip
-                label={'Proc: ' + metrics.processCount}
-                size="small"
-                variant="outlined"
-                sx={{ fontSize: '0.7rem' }}
-              />
-            </Tooltip>
-          </Box>
+        {onResize && (
+          <IconBtn title="Resize Resources" onClick={() => onResize(username)}>
+            <SlidersHorizontal size={14} />
+          </IconBtn>
         )}
-
-        <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1 }}>
-          {isRunning && container.accessType === 'ACCESS_TYPE_RDP' && (
-            <Tooltip title="Remote Desktop (RDP)">
-              <IconButton
-                size="small"
-                color="primary"
-                onClick={() => window.open('/guacamole/', '_blank')}
-              >
-                <DesktopWindowsIcon />
-              </IconButton>
-            </Tooltip>
-          )}
-          {isRunning && container.accessType !== 'ACCESS_TYPE_RDP' && onTerminal && (
-            <Tooltip title="Open Terminal">
-              <IconButton
-                size="small"
-                color="primary"
-                onClick={() => onTerminal(container.username || container.name)}
-              >
-                <TerminalIcon />
-              </IconButton>
-            </Tooltip>
-          )}
-          {onResize && (
-            <Tooltip title="Resize Resources">
-              <IconButton
-                size="small"
-                color="info"
-                onClick={() => onResize(container.username || container.name)}
-              >
-                <TuneIcon />
-              </IconButton>
-            </Tooltip>
-          )}
-          {onEditFirewall && (
-            <Tooltip title="Firewall Settings">
-              <IconButton
-                size="small"
-                color="warning"
-                onClick={() => onEditFirewall(container.username || container.name)}
-              >
-                <SecurityIcon />
-              </IconButton>
-            </Tooltip>
-          )}
-          {onEditLabels && (
-            <Tooltip title="Edit Labels">
-              <IconButton
-                size="small"
-                color="info"
-                onClick={() => onEditLabels(container.username || container.name)}
-              >
-                <LabelIcon />
-              </IconButton>
-            </Tooltip>
-          )}
-          {isRunning ? (
-            <Tooltip title="Stop">
-              <IconButton size="small" onClick={() => onStop?.(container.username || container.name)}>
-                <StopIcon />
-              </IconButton>
-            </Tooltip>
-          ) : (
-            <Tooltip title="Start">
-              <IconButton size="small" onClick={() => onStart?.(container.username || container.name)}>
-                <PlayArrowIcon />
-              </IconButton>
-            </Tooltip>
-          )}
-          <Tooltip title="Delete">
-            <IconButton
-              size="small"
-              color="error"
-              onClick={() => onDelete(container.username || container.name)}
-            >
-              <DeleteIcon />
-            </IconButton>
-          </Tooltip>
-        </Box>
-      </CardContent>
-    </Card>
+        {onEditFirewall && (
+          <IconBtn title="Firewall" onClick={() => onEditFirewall(username)} className="hover:text-[var(--c-amber)]">
+            <Shield size={14} />
+          </IconBtn>
+        )}
+        {onEditLabels && (
+          <IconBtn title="Edit Labels" onClick={() => onEditLabels(username)}>
+            <Tag size={14} />
+          </IconBtn>
+        )}
+        {isRunning ? (
+          <IconBtn title="Stop" onClick={() => onStop?.(username)} className="hover:text-[var(--c-amber)]">
+            <Square size={14} />
+          </IconBtn>
+        ) : (
+          <IconBtn title="Start" onClick={() => onStart?.(username)} className="hover:text-[var(--c-emerald)]">
+            <Play size={14} />
+          </IconBtn>
+        )}
+        <IconBtn title="Delete" onClick={() => onDelete(username)} className="hover:text-[var(--c-red)] hover:bg-red-500/10">
+          <Trash2 size={14} />
+        </IconBtn>
+      </div>
+    </div>
   );
 }

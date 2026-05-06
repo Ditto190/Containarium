@@ -36,6 +36,8 @@ function getConnectionKey(server: Server): string {
  * Build SSE URL for a server
  */
 function buildEventUrl(server: Server): string {
+  if (server.endpoint === '__demo__') return '';
+
   // Normalize base URL - the endpoint already includes /v1
   let baseUrl = server.endpoint.trim();
 
@@ -71,6 +73,13 @@ function getOrCreateConnection(
 
   if (!conn) {
     const url = buildEventUrl(server);
+    if (!url) {
+      // Demo / no-op server — return a stub that never fires
+      return {
+        addListener: () => {},
+        removeListener: () => {},
+      };
+    }
     const eventSource = new EventSource(url);
 
     conn = {

@@ -1,45 +1,9 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
-import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
-import {
-  Box,
-  Typography,
-  Paper,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Chip,
-  CircularProgress,
-  Button,
-  Switch,
-  FormControlLabel,
-  IconButton,
-  Tooltip,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  TextField,
-  Link,
-  Autocomplete,
-  MenuItem,
-  Select,
-  FormControl,
-  InputLabel,
-} from '@mui/material';
-import RefreshIcon from '@mui/icons-material/Refresh';
-import AddIcon from '@mui/icons-material/Add';
-import DeleteIcon from '@mui/icons-material/Delete';
-import OpenInNewIcon from '@mui/icons-material/OpenInNew';
-import PublicIcon from '@mui/icons-material/Public';
-import CableIcon from '@mui/icons-material/Cable';
-import VpnLockIcon from '@mui/icons-material/VpnLock';
+import { RefreshCw, Plus, Trash2, Globe, Network, Lock, ExternalLink, ChevronDown, ChevronRight } from 'lucide-react';
 import { NetworkTopology, ProxyRoute, DNSRecord, RouteProtocol, PassthroughRoute, getRouteProtocolName, isGRPCRoute, isTLSPassthroughProtocol } from '@/src/types/app';
+import { Modal, ModalBtn, FormField, Input } from '@/src/components/ui/Modal';
 
 interface NetworkTopologyViewProps {
   topology: NetworkTopology;
@@ -60,7 +24,18 @@ interface NetworkTopologyViewProps {
   onRefresh: () => void;
 }
 
-// Unified Route Table Component - shows both proxy and passthrough routes
+function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
+  return (
+    <button role="switch" aria-checked={checked} onClick={() => !disabled && onChange(!checked)} disabled={disabled}
+      className={`relative h-4 w-8 shrink-0 rounded-full transition-colors disabled:opacity-40 ${checked ? 'bg-[var(--accent)]' : 'bg-[var(--border)]'}`}>
+      <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-4' : 'translate-x-0.5'}`} />
+    </button>
+  );
+}
+
+const TH = 'px-3 py-2.5 text-left text-xs font-medium text-[var(--text-secondary)] whitespace-nowrap';
+const TD = 'px-3 py-2 text-xs text-[var(--text-secondary)]';
+
 interface UnifiedRouteTableProps {
   proxyRoutes: ProxyRoute[];
   passthroughRoutes: PassthroughRoute[];
@@ -70,428 +45,199 @@ interface UnifiedRouteTableProps {
   onTogglePassthroughRoute?: (externalPort: number, protocol: RouteProtocol, enabled: boolean) => void;
 }
 
-function UnifiedRouteTable({
-  proxyRoutes,
-  passthroughRoutes,
-  onDeleteProxyRoute,
-  onToggleProxyRoute,
-  onDeletePassthroughRoute,
-  onTogglePassthroughRoute
-}: UnifiedRouteTableProps) {
+function UnifiedRouteTable({ proxyRoutes, passthroughRoutes, onDeleteProxyRoute, onToggleProxyRoute, onDeletePassthroughRoute, onTogglePassthroughRoute }: UnifiedRouteTableProps) {
   const totalRoutes = proxyRoutes.length + passthroughRoutes.length;
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
 
-  // Extract parent domain from a full domain (e.g. "api.dev.kafeido.app" → "dev.kafeido.app")
-  const getParentDomain = (fullDomain: string): string => {
-    const parts = fullDomain.split('.');
-    if (parts.length <= 2) return fullDomain; // e.g. "kafeido.app" has no parent
-    return parts.slice(1).join('.');
-  };
+  const getParentDomain = (fullDomain: string) => { const p = fullDomain.split('.'); return p.length <= 2 ? fullDomain : p.slice(1).join('.'); };
+  const getSubdomainPrefix = (fullDomain: string) => { const p = fullDomain.split('.'); return p.length <= 2 ? fullDomain : p[0]; };
 
-  // Extract subdomain prefix (e.g. "api.dev.kafeido.app" → "api")
-  const getSubdomainPrefix = (fullDomain: string): string => {
-    const parts = fullDomain.split('.');
-    if (parts.length <= 2) return fullDomain;
-    return parts[0];
-  };
-
-  // Split proxy routes into HTTP/gRPC and TLS passthrough
   const { httpGrpcRoutes, tlsPassthroughRoutes } = useMemo(() => {
-    const httpGrpc: ProxyRoute[] = [];
-    const tlsPassthrough: ProxyRoute[] = [];
-    for (const route of proxyRoutes) {
-      if (isTLSPassthroughProtocol(route.protocol)) {
-        tlsPassthrough.push(route);
-      } else {
-        httpGrpc.push(route);
-      }
-    }
+    const httpGrpc: ProxyRoute[] = [], tlsPassthrough: ProxyRoute[] = [];
+    for (const r of proxyRoutes) { (isTLSPassthroughProtocol(r.protocol) ? tlsPassthrough : httpGrpc).push(r); }
     return { httpGrpcRoutes: httpGrpc, tlsPassthroughRoutes: tlsPassthrough };
   }, [proxyRoutes]);
 
-  // Group HTTP/gRPC proxy routes by parent domain
   const proxyGroups = useMemo(() => {
     const groups: Record<string, ProxyRoute[]> = {};
-    for (const route of httpGrpcRoutes) {
-      const domain = route.fullDomain || route.subdomain;
+    for (const r of httpGrpcRoutes) {
+      const domain = r.fullDomain || r.subdomain;
       const parent = getParentDomain(domain);
       if (!groups[parent]) groups[parent] = [];
-      groups[parent].push(route);
+      groups[parent].push(r);
     }
-    // Sort groups by name, sort routes within each group
     const sorted = Object.entries(groups).sort(([a], [b]) => a.localeCompare(b));
-    for (const [, routes] of sorted) {
-      routes.sort((a, b) => (a.fullDomain || '').localeCompare(b.fullDomain || ''));
-    }
+    for (const [, routes] of sorted) routes.sort((a, b) => (a.fullDomain || '').localeCompare(b.fullDomain || ''));
     return sorted;
   }, [httpGrpcRoutes]);
 
-  const toggleGroup = (group: string) => {
-    setCollapsedGroups(prev => ({ ...prev, [group]: !prev[group] }));
+  const toggleGroup = (group: string) => setCollapsedGroups(prev => ({ ...prev, [group]: !prev[group] }));
+
+  if (totalRoutes === 0) return <p className="py-8 text-center text-xs text-[var(--text-muted)]">No routes configured</p>;
+
+  const protocolBadge = (protocol: string | undefined) => {
+    if (isTLSPassthroughProtocol(protocol as RouteProtocol | undefined)) return 'border-violet-500/30 bg-violet-500/10 text-[var(--c-violet)]';
+    if (isGRPCRoute(protocol as RouteProtocol | undefined)) return 'border-blue-500/30 bg-blue-500/10 text-[var(--c-blue)]';
+    return 'border-[var(--border-subtle)] bg-[var(--surface-2)] text-[var(--text-muted)]';
   };
 
-  if (totalRoutes === 0) {
-    return (
-      <Box sx={{ textAlign: 'center', py: 4 }}>
-        <Typography color="text.secondary">No routes configured</Typography>
-      </Box>
-    );
-  }
-
   return (
-    <TableContainer>
-      <Table size="small">
-        <TableHead>
-          <TableRow>
-            <TableCell>Type</TableCell>
-            <TableCell>Endpoint</TableCell>
-            <TableCell>Target</TableCell>
-            <TableCell>Protocol</TableCell>
-            <TableCell>Container</TableCell>
-            <TableCell>Enabled</TableCell>
-            <TableCell align="right">Actions</TableCell>
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {/* Proxy Routes — grouped by parent domain */}
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="border-b border-[var(--border-subtle)] bg-[var(--surface)]">
+            {['Type', 'Endpoint', 'Target', 'Protocol', 'Container', 'Enabled', ''].map(h => <th key={h} className={TH}>{h}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {/* Proxy route groups */}
           {proxyGroups.map(([parentDomain, routes]) => {
             const isCollapsed = collapsedGroups[parentDomain] ?? false;
             const activeCount = routes.filter(r => r.active).length;
-
             return [
-              // Group header row
-              <TableRow
-                key={`group-${parentDomain}`}
-                sx={{
-                  bgcolor: 'action.hover',
-                  cursor: 'pointer',
-                  '&:hover': { bgcolor: 'action.selected' },
-                }}
-                onClick={() => toggleGroup(parentDomain)}
-              >
-                <TableCell colSpan={2}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                    {isCollapsed
-                      ? <KeyboardArrowRightIcon fontSize="small" />
-                      : <KeyboardArrowDownIcon fontSize="small" />
-                    }
-                    <PublicIcon sx={{ fontSize: 16, color: 'primary.main' }} />
-                    <Typography variant="body2" fontWeight="bold">
-                      *.{parentDomain}
-                    </Typography>
-                    <Chip label={`${routes.length}`} size="small" sx={{ ml: 0.5, height: 20, fontSize: '0.7rem' }} />
-                  </Box>
-                </TableCell>
-                <TableCell colSpan={3}>
-                  <Typography variant="caption" color="text.secondary">
-                    {activeCount}/{routes.length} active
-                  </Typography>
-                </TableCell>
-                <TableCell colSpan={2} />
-              </TableRow>,
-              // Route rows (hidden when collapsed)
-              ...(!isCollapsed ? routes.map((route) => (
-                <TableRow key={`proxy-${route.fullDomain || route.subdomain}`} sx={{ opacity: route.active ? 1 : 0.6 }}>
-                  <TableCell>
-                    <Tooltip title="Proxy: TLS terminated at Caddy">
-                      <Chip
-                        icon={<PublicIcon sx={{ fontSize: 16 }} />}
-                        label="Proxy"
-                        size="small"
-                        color="primary"
-                        variant="outlined"
-                      />
-                    </Tooltip>
-                  </TableCell>
-                  <TableCell>
-                    <Link
-                      href={`https://${route.fullDomain}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      sx={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 0.5,
-                        textDecoration: route.active ? 'none' : 'line-through',
-                        color: route.active ? 'primary.main' : 'text.disabled',
-                        pl: 1,
-                      }}
-                    >
-                      <Typography component="span" fontWeight="bold">{getSubdomainPrefix(route.fullDomain)}</Typography>
-                      <Typography component="span" color="text.secondary">.{parentDomain}</Typography>
-                      <OpenInNewIcon sx={{ fontSize: 14 }} />
-                    </Link>
-                  </TableCell>
-                  <TableCell>
-                    <Typography variant="body2" fontFamily="monospace">
-                      {route.containerIp ? `${route.containerIp}:${route.port}` : 'N/A'}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>
-                    <Chip
-                      label={getRouteProtocolName(route.protocol)}
-                      color={isTLSPassthroughProtocol(route.protocol) ? 'secondary' : isGRPCRoute(route.protocol) ? 'info' : 'default'}
-                      size="small"
-                      variant="outlined"
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <Typography variant="body2" color="text.secondary">
-                      {route.appName || '-'}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>
-                    <Switch
-                      size="small"
-                      checked={route.active}
-                      onChange={(e) => onToggleProxyRoute?.(route.fullDomain, e.target.checked)}
-                      disabled={!onToggleProxyRoute}
-                    />
-                  </TableCell>
-                  <TableCell align="right">
+              <tr key={`group-${parentDomain}`} onClick={() => toggleGroup(parentDomain)}
+                className="cursor-pointer border-b border-[var(--border-subtle)] bg-[var(--surface-2)] transition-colors hover:bg-[var(--surface)]">
+                <td colSpan={2} className="px-3 py-2">
+                  <div className="flex items-center gap-1.5">
+                    {isCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+                    <Globe size={13} className="text-[var(--accent)]" />
+                    <span className="font-medium text-[var(--text)]">*.{parentDomain}</span>
+                    <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--surface)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)]">{routes.length}</span>
+                  </div>
+                </td>
+                <td colSpan={3} className="px-3 py-2 text-[10px] text-[var(--text-muted)]">{activeCount}/{routes.length} active</td>
+                <td colSpan={2} />
+              </tr>,
+              ...(!isCollapsed ? routes.map(route => (
+                <tr key={`proxy-${route.fullDomain || route.subdomain}`}
+                  className={`border-b border-[var(--border-subtle)] transition-colors hover:bg-[var(--surface)] last:border-0 ${!route.active ? 'opacity-60' : ''}`}>
+                  <td className={TD}>
+                    <span title="Proxy: TLS terminated at Caddy" className="rounded-full border border-blue-500/30 bg-blue-500/10 px-2 py-0.5 text-[10px] text-[var(--c-blue)] flex items-center gap-1 w-fit">
+                      <Globe size={10} /> Proxy
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 pl-6">
+                    <a href={`https://${route.fullDomain}`} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}
+                      className={`flex items-center gap-1 font-mono text-[10px] hover:underline ${route.active ? 'text-[var(--accent)]' : 'text-[var(--text-muted)] line-through'}`}>
+                      <strong>{getSubdomainPrefix(route.fullDomain)}</strong>
+                      <span className="text-[var(--text-muted)]">.{parentDomain}</span>
+                      <ExternalLink size={10} />
+                    </a>
+                  </td>
+                  <td className={TD + ' font-mono'}>{route.containerIp ? `${route.containerIp}:${route.port}` : 'N/A'}</td>
+                  <td className={TD}>
+                    <span className={`rounded-full border px-2 py-0.5 text-[10px] ${protocolBadge(route.protocol)}`}>{getRouteProtocolName(route.protocol)}</span>
+                  </td>
+                  <td className={TD}>{route.appName || '-'}</td>
+                  <td className={TD}><Toggle checked={route.active} onChange={v => onToggleProxyRoute?.(route.fullDomain, v)} disabled={!onToggleProxyRoute} /></td>
+                  <td className="px-3 py-2">
                     {onDeleteProxyRoute && (
-                      <Tooltip title="Delete route">
-                        <IconButton
-                          size="small"
-                          color="error"
-                          onClick={() => onDeleteProxyRoute(route.fullDomain)}
-                        >
-                          <DeleteIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
+                      <button onClick={() => onDeleteProxyRoute(route.fullDomain)} title="Delete route"
+                        className="rounded p-1 text-[var(--text-muted)] transition-colors hover:bg-red-500/10 hover:text-[var(--c-red)]"><Trash2 size={12} /></button>
                     )}
-                  </TableCell>
-                </TableRow>
+                  </td>
+                </tr>
               )) : []),
             ];
           })}
-          {/* TLS Passthrough Routes (SNI-based on :443) */}
+
+          {/* TLS Passthrough section */}
           {tlsPassthroughRoutes.length > 0 && (
-            <TableRow sx={{ bgcolor: 'action.hover' }}>
-              <TableCell colSpan={7}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                  <VpnLockIcon sx={{ fontSize: 16, color: 'secondary.main' }} />
-                  <Typography variant="body2" fontWeight="bold">
-                    TLS Passthrough (SNI)
-                  </Typography>
-                  <Chip label={`${tlsPassthroughRoutes.length}`} size="small" sx={{ ml: 0.5, height: 20, fontSize: '0.7rem' }} />
-                  <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
-                    All on :443 — raw TLS forwarded, mTLS preserved
-                  </Typography>
-                </Box>
-              </TableCell>
-            </TableRow>
+            <tr className="border-b border-[var(--border-subtle)] bg-[var(--surface-2)]">
+              <td colSpan={7} className="px-3 py-2">
+                <div className="flex items-center gap-1.5">
+                  <Lock size={13} className="text-[var(--c-violet)]" />
+                  <span className="font-medium text-[var(--text)]">TLS Passthrough (SNI)</span>
+                  <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--surface)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)]">{tlsPassthroughRoutes.length}</span>
+                  <span className="ml-2 text-[10px] text-[var(--text-muted)]">All on :443 — raw TLS forwarded, mTLS preserved</span>
+                </div>
+              </td>
+            </tr>
           )}
-          {tlsPassthroughRoutes.map((route) => (
-            <TableRow key={`tls-${route.fullDomain || route.subdomain}`} sx={{ opacity: route.active ? 1 : 0.6 }}>
-              <TableCell>
-                <Tooltip title="TLS Passthrough: Raw TLS forwarded by SNI, mTLS preserved end-to-end">
-                  <Chip
-                    icon={<VpnLockIcon sx={{ fontSize: 16 }} />}
-                    label="TLS Passthrough"
-                    size="small"
-                    color="secondary"
-                    variant="outlined"
-                  />
-                </Tooltip>
-              </TableCell>
-              <TableCell>
-                <Typography
-                  variant="body2"
-                  fontFamily="monospace"
-                  sx={{
-                    textDecoration: route.active ? 'none' : 'line-through',
-                    color: route.active ? 'text.primary' : 'text.disabled',
-                    pl: 1,
-                  }}
-                >
-                  {route.fullDomain || route.subdomain}:443
-                </Typography>
-              </TableCell>
-              <TableCell>
-                <Typography variant="body2" fontFamily="monospace">
-                  {route.containerIp ? `${route.containerIp}:${route.port}` : 'N/A'}
-                </Typography>
-              </TableCell>
-              <TableCell>
-                <Chip
-                  label="TLS Passthrough"
-                  color="secondary"
-                  size="small"
-                  variant="outlined"
-                />
-              </TableCell>
-              <TableCell>
-                <Typography variant="body2" color="text.secondary">
-                  {route.appName || '-'}
-                </Typography>
-              </TableCell>
-              <TableCell>
-                <Switch
-                  size="small"
-                  checked={route.active}
-                  onChange={(e) => onToggleProxyRoute?.(route.fullDomain, e.target.checked)}
-                  disabled={!onToggleProxyRoute}
-                />
-              </TableCell>
-              <TableCell align="right">
+          {tlsPassthroughRoutes.map(route => (
+            <tr key={`tls-${route.fullDomain || route.subdomain}`}
+              className={`border-b border-[var(--border-subtle)] transition-colors hover:bg-[var(--surface)] last:border-0 ${!route.active ? 'opacity-60' : ''}`}>
+              <td className={TD}>
+                <span title="TLS Passthrough: Raw TLS forwarded via SNI" className="rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[10px] text-[var(--c-violet)] flex items-center gap-1 w-fit">
+                  <Lock size={10} /> TLS Pass
+                </span>
+              </td>
+              <td className={`${TD} font-mono pl-6 ${!route.active ? 'line-through' : ''}`}>{route.fullDomain || route.subdomain}:443</td>
+              <td className={TD + ' font-mono'}>{route.containerIp ? `${route.containerIp}:${route.port}` : 'N/A'}</td>
+              <td className={TD}><span className="rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[10px] text-[var(--c-violet)]">TLS Passthrough</span></td>
+              <td className={TD}>{route.appName || '-'}</td>
+              <td className={TD}><Toggle checked={route.active} onChange={v => onToggleProxyRoute?.(route.fullDomain, v)} disabled={!onToggleProxyRoute} /></td>
+              <td className="px-3 py-2">
                 {onDeleteProxyRoute && (
-                  <Tooltip title="Delete route">
-                    <IconButton
-                      size="small"
-                      color="error"
-                      onClick={() => onDeleteProxyRoute(route.fullDomain)}
-                    >
-                      <DeleteIcon fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
+                  <button onClick={() => onDeleteProxyRoute(route.fullDomain)} title="Delete route"
+                    className="rounded p-1 text-[var(--text-muted)] transition-colors hover:bg-red-500/10 hover:text-[var(--c-red)]"><Trash2 size={12} /></button>
                 )}
-              </TableCell>
-            </TableRow>
+              </td>
+            </tr>
           ))}
-          {/* Passthrough Routes (TCP/UDP) — no grouping */}
+
+          {/* Passthrough TCP/UDP section */}
           {passthroughRoutes.length > 0 && (
-            <TableRow sx={{ bgcolor: 'action.hover' }}>
-              <TableCell colSpan={7}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                  <CableIcon sx={{ fontSize: 16, color: 'secondary.main' }} />
-                  <Typography variant="body2" fontWeight="bold">
-                    Passthrough (TCP/UDP)
-                  </Typography>
-                  <Chip label={`${passthroughRoutes.length}`} size="small" sx={{ ml: 0.5, height: 20, fontSize: '0.7rem' }} />
-                </Box>
-              </TableCell>
-            </TableRow>
+            <tr className="border-b border-[var(--border-subtle)] bg-[var(--surface-2)]">
+              <td colSpan={7} className="px-3 py-2">
+                <div className="flex items-center gap-1.5">
+                  <Network size={13} className="text-[var(--c-amber)]" />
+                  <span className="font-medium text-[var(--text)]">Passthrough (TCP/UDP)</span>
+                  <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--surface)] px-1.5 py-0.5 text-[10px] text-[var(--text-muted)]">{passthroughRoutes.length}</span>
+                </div>
+              </td>
+            </tr>
           )}
-          {passthroughRoutes.map((route) => (
-            <TableRow key={`passthrough-${route.externalPort}-${route.protocol}`} sx={{ opacity: route.active ? 1 : 0.6 }}>
-              <TableCell>
-                <Tooltip title="Passthrough: Direct TCP/UDP forwarding (mTLS supported)">
-                  <Chip
-                    icon={<CableIcon sx={{ fontSize: 16 }} />}
-                    label="Passthrough"
-                    size="small"
-                    color="secondary"
-                    variant="outlined"
-                  />
-                </Tooltip>
-              </TableCell>
-              <TableCell>
-                <Typography
-                  variant="body2"
-                  fontFamily="monospace"
-                  sx={{ textDecoration: route.active ? 'none' : 'line-through', pl: 1 }}
-                >
-                  :{route.externalPort}
-                </Typography>
-              </TableCell>
-              <TableCell>
-                <Typography variant="body2" fontFamily="monospace">
-                  {route.targetIp}:{route.targetPort}
-                </Typography>
-              </TableCell>
-              <TableCell>
-                <Chip
-                  label={getRouteProtocolName(route.protocol)}
-                  color="warning"
-                  size="small"
-                  variant="outlined"
-                />
-              </TableCell>
-              <TableCell>
-                <Typography variant="body2" color="text.secondary">
-                  {route.containerName || '-'}
-                </Typography>
-              </TableCell>
-              <TableCell>
-                <Switch
-                  size="small"
-                  checked={route.active}
-                  onChange={(e) => onTogglePassthroughRoute?.(route.externalPort, route.protocol, e.target.checked)}
-                  disabled={!onTogglePassthroughRoute}
-                />
-              </TableCell>
-              <TableCell align="right">
+          {passthroughRoutes.map(route => (
+            <tr key={`passthrough-${route.externalPort}-${route.protocol}`}
+              className={`border-b border-[var(--border-subtle)] transition-colors hover:bg-[var(--surface)] last:border-0 ${!route.active ? 'opacity-60' : ''}`}>
+              <td className={TD}>
+                <span title="Passthrough: Direct TCP/UDP forwarding" className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] text-[var(--c-amber)] flex items-center gap-1 w-fit">
+                  <Network size={10} /> Pass
+                </span>
+              </td>
+              <td className={`${TD} font-mono ${!route.active ? 'line-through' : ''}`}>:{route.externalPort}</td>
+              <td className={TD + ' font-mono'}>{route.targetIp}:{route.targetPort}</td>
+              <td className={TD}><span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] text-[var(--c-amber)]">{getRouteProtocolName(route.protocol)}</span></td>
+              <td className={TD}>{route.containerName || '-'}</td>
+              <td className={TD}><Toggle checked={route.active} onChange={v => onTogglePassthroughRoute?.(route.externalPort, route.protocol, v)} disabled={!onTogglePassthroughRoute} /></td>
+              <td className="px-3 py-2">
                 {onDeletePassthroughRoute && (
-                  <Tooltip title="Delete route">
-                    <IconButton
-                      size="small"
-                      color="error"
-                      onClick={() => onDeletePassthroughRoute(route.externalPort, route.protocol)}
-                    >
-                      <DeleteIcon fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
+                  <button onClick={() => onDeletePassthroughRoute(route.externalPort, route.protocol)} title="Delete route"
+                    className="rounded p-1 text-[var(--text-muted)] transition-colors hover:bg-red-500/10 hover:text-[var(--c-red)]"><Trash2 size={12} /></button>
                 )}
-              </TableCell>
-            </TableRow>
+              </td>
+            </tr>
           ))}
-        </TableBody>
-      </Table>
-    </TableContainer>
+        </tbody>
+      </table>
+    </div>
   );
 }
 
 export default function NetworkTopologyView({
-  topology,
-  routes,
-  passthroughRoutes = [],
-  dnsRecords = [],
-  baseDomain = '',
-  isLoading,
-  error,
-  includeStopped,
-  onIncludeStoppedChange,
-  onAddRoute,
-  onDeleteRoute,
-  onToggleRoute,
-  onAddPassthroughRoute,
-  onDeletePassthroughRoute,
-  onTogglePassthroughRoute,
-  onRefresh,
+  topology, routes, passthroughRoutes = [], dnsRecords = [], baseDomain = '', isLoading, error,
+  includeStopped, onIncludeStoppedChange, onAddRoute, onDeleteRoute, onToggleRoute,
+  onAddPassthroughRoute, onDeletePassthroughRoute, onTogglePassthroughRoute, onRefresh,
 }: NetworkTopologyViewProps) {
-  // Dialog states
   const [addRouteDialog, setAddRouteDialog] = useState(false);
-  const [newRoute, setNewRoute] = useState({
-    domain: '',
-    targetIp: '',
-    targetPort: '',
-    protocol: 'ROUTE_PROTOCOL_HTTP' as RouteProtocol,
-    externalPort: '',
-  });
-  const [deleteRouteDialog, setDeleteRouteDialog] = useState<{ open: boolean; domain: string }>({
-    open: false,
-    domain: '',
-  });
-  const [deletePassthroughDialog, setDeletePassthroughDialog] = useState<{ open: boolean; externalPort: number; protocol: RouteProtocol }>({
-    open: false,
-    externalPort: 0,
-    protocol: 'ROUTE_PROTOCOL_TCP',
-  });
+  const [newRoute, setNewRoute] = useState({ domain: '', targetIp: '', targetPort: '', protocol: 'ROUTE_PROTOCOL_HTTP' as RouteProtocol, externalPort: '' });
+  const [deleteRouteDialog, setDeleteRouteDialog] = useState<{ open: boolean; domain: string }>({ open: false, domain: '' });
+  const [deletePassthroughDialog, setDeletePassthroughDialog] = useState<{ open: boolean; externalPort: number; protocol: RouteProtocol }>({ open: false, externalPort: 0, protocol: 'ROUTE_PROTOCOL_TCP' });
 
-  // Build domain suggestions from DNS records
-  // Each record has: name (subdomain like "pes"), data (full domain like "pes.kafeido.app")
-  const domainSuggestions = dnsRecords.map(r => ({
-    subdomain: r.name,
-    fullDomain: r.data,
-  }));
-
-  // Also add existing route domains if not already in suggestions
-  const existingDomains = routes.map(r => r.fullDomain).filter(Boolean);
-  existingDomains.forEach(domain => {
-    if (!domainSuggestions.find(s => s.fullDomain === domain)) {
-      const subdomain = domain.replace('.' + baseDomain, '');
-      domainSuggestions.push({ subdomain, fullDomain: domain });
+  const domainSuggestions = useMemo(() => {
+    const suggestions = dnsRecords.map(r => ({ subdomain: r.name, fullDomain: r.data }));
+    for (const domain of routes.map(r => r.fullDomain).filter(Boolean)) {
+      if (!suggestions.find(s => s.fullDomain === domain)) {
+        suggestions.push({ subdomain: domain.replace('.' + baseDomain, ''), fullDomain: domain });
+      }
     }
-  });
+    return suggestions;
+  }, [dnsRecords, routes, baseDomain]);
 
-  // Extract container options from topology nodes
   const containerOptions = topology.nodes
-    .filter(node => node.type === 'container' && node.ipAddress && node.state === 'running')
-    .map(node => ({
-      name: node.name,
-      ip: node.ipAddress || '',
-    }));
+    .filter(n => n.type === 'container' && n.ipAddress && n.state === 'running')
+    .map(n => ({ name: n.name, ip: n.ipAddress || '' }));
 
   const handleAddRoute = async () => {
     if (onAddRoute && newRoute.domain && newRoute.targetIp && newRoute.targetPort) {
@@ -501,291 +247,146 @@ export default function NetworkTopologyView({
     }
   };
 
-  const handleDeleteRoute = (domain: string) => {
-    setDeleteRouteDialog({ open: true, domain });
+  const handleConfirmDeleteRoute = async () => {
+    if (onDeleteRoute) { await onDeleteRoute(deleteRouteDialog.domain); setDeleteRouteDialog({ open: false, domain: '' }); }
   };
 
-  const handleDeletePassthroughRoute = (externalPort: number, protocol?: RouteProtocol) => {
-    setDeletePassthroughDialog({ open: true, externalPort, protocol: protocol || 'ROUTE_PROTOCOL_TCP' });
-  };
-
-  const handleConfirmDeletePassthroughRoute = async () => {
+  const handleConfirmDeletePassthrough = async () => {
     if (onDeletePassthroughRoute) {
       await onDeletePassthroughRoute(deletePassthroughDialog.externalPort, deletePassthroughDialog.protocol);
       setDeletePassthroughDialog({ open: false, externalPort: 0, protocol: 'ROUTE_PROTOCOL_TCP' });
     }
   };
 
-  const handleConfirmDeleteRoute = async () => {
-    if (onDeleteRoute) {
-      await onDeleteRoute(deleteRouteDialog.domain);
-      setDeleteRouteDialog({ open: false, domain: '' });
-    }
-  };
+  const inputCls = 'w-full rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] px-3 py-1.5 text-xs text-[var(--text)] placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:outline-none';
+  const selectCls = 'w-full appearance-none rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] px-3 py-1.5 text-xs text-[var(--text)] focus:border-[var(--accent)] focus:outline-none';
 
   if (isLoading && topology.nodes.length === 0) {
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 300 }}>
-        <CircularProgress />
-      </Box>
-    );
+    return <div className="flex min-h-[300px] items-center justify-center"><div className="h-5 w-5 animate-spin rounded-full border-2 border-[var(--border)] border-t-[var(--accent)]" /></div>;
   }
 
   if (error) {
     return (
-      <Box sx={{ p: 3, textAlign: 'center' }}>
-        <Typography color="error" gutterBottom>
-          Failed to load network topology
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          {error.message}
-        </Typography>
-        <Button onClick={onRefresh} sx={{ mt: 2 }}>
-          Retry
-        </Button>
-      </Box>
+      <div className="flex flex-col items-center gap-2 py-16 text-center">
+        <p className="text-sm font-medium text-[var(--c-red)]">Failed to load network topology</p>
+        <p className="text-xs text-[var(--text-muted)]">{error.message}</p>
+        <button onClick={onRefresh} className="mt-2 rounded-md border border-[var(--border-subtle)] px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-2)]">Retry</button>
+      </div>
     );
   }
 
   return (
-    <Box sx={{ p: 3 }}>
+    <div className="p-6">
       {/* Header */}
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h5">Network Topology</Typography>
-        <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
-          <FormControlLabel
-            control={
-              <Switch
-                checked={includeStopped}
-                onChange={(e) => onIncludeStoppedChange(e.target.checked)}
-              />
-            }
-            label="Include stopped"
-          />
-          <Button
-            variant="outlined"
-            startIcon={<RefreshIcon />}
-            onClick={onRefresh}
-            disabled={isLoading}
-          >
-            Refresh
-          </Button>
-        </Box>
-      </Box>
+      <div className="mb-6 flex items-center gap-3">
+        <h1 className="mr-auto text-base font-semibold text-[var(--text)]">Network Topology</h1>
+        <label className="flex cursor-pointer items-center gap-2 text-xs text-[var(--text-secondary)]">
+          <input type="checkbox" checked={includeStopped} onChange={e => onIncludeStoppedChange(e.target.checked)} className="accent-[var(--accent)]" />
+          Include stopped
+        </label>
+        <button onClick={onRefresh} disabled={isLoading}
+          className="flex items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--surface)] px-3 py-1.5 text-xs text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-2)] disabled:opacity-50">
+          <RefreshCw size={12} className={isLoading ? 'animate-spin' : ''} /> Refresh
+        </button>
+      </div>
 
       {/* Route Table */}
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-        <Typography variant="h6">
-          Routes ({routes.length + passthroughRoutes.length})
-        </Typography>
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-sm font-medium text-[var(--text)]">Routes <span className="ml-1 text-xs font-normal text-[var(--text-muted)]">({routes.length + passthroughRoutes.length})</span></h2>
         {(onAddRoute || onAddPassthroughRoute) && (
-          <Button
-            variant="outlined"
-            startIcon={<AddIcon />}
-            onClick={() => setAddRouteDialog(true)}
-          >
-            Add Route
-          </Button>
+          <button onClick={() => setAddRouteDialog(true)}
+            className="flex items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--surface)] px-3 py-1.5 text-xs text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-2)]">
+            <Plus size={12} /> Add Route
+          </button>
         )}
-      </Box>
-      <Paper>
+      </div>
+
+      <div className="rounded-xl border border-[var(--border-subtle)]">
         <UnifiedRouteTable
           proxyRoutes={routes}
           passthroughRoutes={passthroughRoutes}
-          onDeleteProxyRoute={onDeleteRoute ? handleDeleteRoute : undefined}
+          onDeleteProxyRoute={onDeleteRoute ? d => setDeleteRouteDialog({ open: true, domain: d }) : undefined}
           onToggleProxyRoute={onToggleRoute}
-          onDeletePassthroughRoute={onDeletePassthroughRoute ? handleDeletePassthroughRoute : undefined}
+          onDeletePassthroughRoute={onDeletePassthroughRoute ? (p, proto) => setDeletePassthroughDialog({ open: true, externalPort: p, protocol: proto || 'ROUTE_PROTOCOL_TCP' }) : undefined}
           onTogglePassthroughRoute={onTogglePassthroughRoute}
         />
-      </Paper>
+      </div>
 
       {/* Add Route Dialog */}
-      <Dialog open={addRouteDialog} onClose={() => setAddRouteDialog(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Add Route</DialogTitle>
-        <DialogContent>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2, mt: 1 }}>
-            Map a domain to a container. For HTTP/gRPC, TLS is terminated at Caddy. For TLS Passthrough, raw TLS is forwarded via SNI routing (mTLS preserved).
-          </Typography>
-
-          {/* Domain - Autocomplete with suggestions from DNS records */}
-          <Autocomplete
-            freeSolo
-            options={domainSuggestions}
-            getOptionLabel={(option) => {
-              if (typeof option === 'string') return option;
-              return option.fullDomain;
-            }}
-            value={newRoute.domain}
-            onChange={(_, value) => {
-              if (typeof value === 'string') {
-                setNewRoute({ ...newRoute, domain: value });
-              } else if (value) {
-                setNewRoute({ ...newRoute, domain: value.fullDomain });
-              }
-            }}
-            onInputChange={(_, value) => setNewRoute({ ...newRoute, domain: value })}
-            renderOption={(props, option) => (
-              <li {...props} key={typeof option === 'string' ? option : option.fullDomain}>
-                <Box>
-                  <Typography variant="body2" fontWeight={500}>
-                    {typeof option === 'string' ? option : option.subdomain}
-                  </Typography>
-                  {typeof option !== 'string' && (
-                    <Typography variant="caption" color="text.secondary">
-                      {option.fullDomain}
-                    </Typography>
-                  )}
-                </Box>
-              </li>
-            )}
-            renderInput={(params) => (
-              <TextField
-                {...params}
-                fullWidth
-                label="Domain"
-                placeholder={baseDomain ? `subdomain.${baseDomain}` : 'test.example.com'}
-                helperText={baseDomain ? `Base domain: ${baseDomain}` : 'Enter the full domain name'}
-                sx={{ mb: 2 }}
-              />
-            )}
-          />
-
-          <FormControl fullWidth sx={{ mb: 2 }}>
-            <InputLabel id="protocol-select-label">Protocol</InputLabel>
-            <Select
-              labelId="protocol-select-label"
-              value={newRoute.protocol}
-              label="Protocol"
-              onChange={(e) => setNewRoute({ ...newRoute, protocol: e.target.value as RouteProtocol })}
-            >
-              <MenuItem value="ROUTE_PROTOCOL_HTTP">HTTP (Web traffic)</MenuItem>
-              <MenuItem value="ROUTE_PROTOCOL_GRPC">gRPC (HTTP/2)</MenuItem>
-              <MenuItem value="ROUTE_PROTOCOL_TLS_PASSTHROUGH">TLS Passthrough (mTLS/SNI)</MenuItem>
-            </Select>
-          </FormControl>
-
+      <Modal
+        open={addRouteDialog}
+        onClose={() => setAddRouteDialog(false)}
+        title="Add Route"
+        size="md"
+        footer={
+          <>
+            <ModalBtn onClick={() => setAddRouteDialog(false)}>Cancel</ModalBtn>
+            <ModalBtn variant="primary" onClick={handleAddRoute} disabled={!newRoute.domain || !newRoute.targetIp || !newRoute.targetPort}>Add Route</ModalBtn>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-3">
+          <p className="text-xs text-[var(--text-muted)]">Map a domain to a container. For HTTP/gRPC, TLS is terminated at Caddy. For TLS Passthrough, raw TLS is forwarded via SNI routing (mTLS preserved).</p>
+          <FormField label="Domain" hint={baseDomain ? `Base domain: ${baseDomain}` : 'Enter the full domain name'}>
+            <>
+              <datalist id="domain-suggestions-list">
+                {domainSuggestions.map(s => <option key={s.fullDomain} value={s.fullDomain}>{s.subdomain}</option>)}
+              </datalist>
+              <input list="domain-suggestions-list" type="text" value={newRoute.domain} onChange={e => setNewRoute({ ...newRoute, domain: e.target.value })}
+                placeholder={baseDomain ? `subdomain.${baseDomain}` : 'test.example.com'} className={inputCls} />
+            </>
+          </FormField>
+          <FormField label="Protocol">
+            <select value={newRoute.protocol} onChange={e => setNewRoute({ ...newRoute, protocol: e.target.value as RouteProtocol })} className={selectCls}>
+              <option value="ROUTE_PROTOCOL_HTTP">HTTP (Web traffic)</option>
+              <option value="ROUTE_PROTOCOL_GRPC">gRPC (HTTP/2)</option>
+              <option value="ROUTE_PROTOCOL_TLS_PASSTHROUGH">TLS Passthrough (mTLS/SNI)</option>
+            </select>
+          </FormField>
           {newRoute.protocol === 'ROUTE_PROTOCOL_TLS_PASSTHROUGH' && (
-            <Typography variant="body2" color="info.main" sx={{ mb: 2, mt: -1 }}>
-              TLS passthrough routes forward raw TLS traffic based on SNI hostname on :443, preserving end-to-end mTLS. No additional firewall or port changes needed.
-            </Typography>
+            <div className="rounded-lg border border-blue-500/30 bg-blue-500/10 p-3 text-[10px] text-[var(--c-blue)]">
+              TLS passthrough routes forward raw TLS traffic on :443 via SNI, preserving end-to-end mTLS. No additional firewall changes needed.
+            </div>
           )}
+          <FormField label="Target IP" hint="Select a container or enter IP manually">
+            <>
+              <datalist id="container-ip-list">
+                {containerOptions.map(c => <option key={c.ip} value={c.ip}>{c.name}</option>)}
+              </datalist>
+              <input list="container-ip-list" type="text" value={newRoute.targetIp} onChange={e => setNewRoute({ ...newRoute, targetIp: e.target.value })}
+                placeholder="10.0.3.136" className={inputCls} />
+            </>
+          </FormField>
+          <FormField label="Target Port" hint="The port on the container">
+            <input type="number" value={newRoute.targetPort} onChange={e => setNewRoute({ ...newRoute, targetPort: e.target.value })}
+              placeholder="8080" className={inputCls} />
+          </FormField>
+        </div>
+      </Modal>
 
-          {/* Target - Select from containers or custom input (common for both types) */}
-          <Autocomplete
-            freeSolo
-            options={containerOptions}
-            getOptionLabel={(option) => {
-              if (typeof option === 'string') return option;
-              return `${option.name} (${option.ip})`;
-            }}
-            value={newRoute.targetIp}
-            onChange={(_, value) => {
-              if (typeof value === 'string') {
-                setNewRoute({ ...newRoute, targetIp: value });
-              } else if (value) {
-                setNewRoute({ ...newRoute, targetIp: value.ip });
-              }
-            }}
-            onInputChange={(_, value) => {
-              // Only update if it looks like an IP or the field is being cleared
-              if (!value || value.match(/^[\d.]+$/) || value.includes('(')) {
-                const ipMatch = value.match(/\(([^)]+)\)/);
-                if (ipMatch) {
-                  setNewRoute({ ...newRoute, targetIp: ipMatch[1] });
-                } else {
-                  setNewRoute({ ...newRoute, targetIp: value });
-                }
-              }
-            }}
-            renderOption={(props, option) => (
-              <li {...props} key={typeof option === 'string' ? option : option.ip}>
-                <Box>
-                  <Typography variant="body2" fontWeight={500}>
-                    {typeof option === 'string' ? option : option.name}
-                  </Typography>
-                  {typeof option !== 'string' && (
-                    <Typography variant="caption" color="text.secondary">
-                      {option.ip}
-                    </Typography>
-                  )}
-                </Box>
-              </li>
-            )}
-            renderInput={(params) => (
-              <TextField
-                {...params}
-                fullWidth
-                label="Target IP"
-                placeholder="10.0.3.136"
-                helperText="Select a container or enter IP manually"
-                sx={{ mb: 2 }}
-              />
-            )}
-          />
+      {/* Delete Proxy Route Dialog */}
+      <Modal open={deleteRouteDialog.open} onClose={() => setDeleteRouteDialog({ open: false, domain: '' })} title="Delete Proxy Route" size="sm"
+        footer={
+          <>
+            <ModalBtn onClick={() => setDeleteRouteDialog({ open: false, domain: '' })}>Cancel</ModalBtn>
+            <ModalBtn variant="danger" onClick={handleConfirmDeleteRoute}>Delete</ModalBtn>
+          </>
+        }>
+        <p className="text-sm text-[var(--text)]">Delete the route for <strong>{deleteRouteDialog.domain}</strong>?</p>
+        <p className="mt-1 text-xs text-[var(--text-muted)]">This will remove the proxy configuration for this domain.</p>
+      </Modal>
 
-          <TextField
-            fullWidth
-            label="Target Port"
-            placeholder="8080"
-            type="number"
-            value={newRoute.targetPort}
-            onChange={(e) => setNewRoute({ ...newRoute, targetPort: e.target.value })}
-            helperText="The port on the container"
-          />
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setAddRouteDialog(false)}>Cancel</Button>
-          <Button
-            onClick={handleAddRoute}
-            variant="contained"
-            disabled={!newRoute.domain || !newRoute.targetIp || !newRoute.targetPort}
-          >
-            Add Route
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* Delete Route Confirmation Dialog */}
-      <Dialog open={deleteRouteDialog.open} onClose={() => setDeleteRouteDialog({ open: false, domain: '' })}>
-        <DialogTitle>Delete Proxy Route</DialogTitle>
-        <DialogContent>
-          <Typography gutterBottom>
-            Are you sure you want to delete the route for <strong>{deleteRouteDialog.domain}</strong>?
-          </Typography>
-          <Typography variant="body2" color="text.secondary">
-            This will remove the proxy configuration for this domain.
-          </Typography>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDeleteRouteDialog({ open: false, domain: '' })}>
-            Cancel
-          </Button>
-          <Button onClick={handleConfirmDeleteRoute} color="error">
-            Delete
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* Delete Passthrough Route Confirmation Dialog */}
-      <Dialog open={deletePassthroughDialog.open} onClose={() => setDeletePassthroughDialog({ open: false, externalPort: 0, protocol: 'ROUTE_PROTOCOL_TCP' })}>
-        <DialogTitle>Delete Passthrough Route</DialogTitle>
-        <DialogContent>
-          <Typography gutterBottom>
-            Are you sure you want to delete the passthrough route for port <strong>{deletePassthroughDialog.externalPort}</strong>?
-          </Typography>
-          <Typography variant="body2" color="text.secondary">
-            This will remove the TCP/UDP port forwarding rule from iptables.
-          </Typography>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDeletePassthroughDialog({ open: false, externalPort: 0, protocol: 'ROUTE_PROTOCOL_TCP' })}>
-            Cancel
-          </Button>
-          <Button onClick={handleConfirmDeletePassthroughRoute} color="error">
-            Delete
-          </Button>
-        </DialogActions>
-      </Dialog>
-    </Box>
+      {/* Delete Passthrough Route Dialog */}
+      <Modal open={deletePassthroughDialog.open} onClose={() => setDeletePassthroughDialog({ open: false, externalPort: 0, protocol: 'ROUTE_PROTOCOL_TCP' })} title="Delete Passthrough Route" size="sm"
+        footer={
+          <>
+            <ModalBtn onClick={() => setDeletePassthroughDialog({ open: false, externalPort: 0, protocol: 'ROUTE_PROTOCOL_TCP' })}>Cancel</ModalBtn>
+            <ModalBtn variant="danger" onClick={handleConfirmDeletePassthrough}>Delete</ModalBtn>
+          </>
+        }>
+        <p className="text-sm text-[var(--text)]">Delete the passthrough route for port <strong>{deletePassthroughDialog.externalPort}</strong>?</p>
+        <p className="mt-1 text-xs text-[var(--text-muted)]">This will remove the TCP/UDP port forwarding rule from iptables.</p>
+      </Modal>
+    </div>
   );
 }
