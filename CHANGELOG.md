@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.3] - 2026-05-09
+
+### Added
+- **PROXY protocol v2 support — real client IP propagation through TLS-passthrough hops.** Containers behind the sentinel previously saw only the immediate proxy peer (`X-Forwarded-For: ::1` for the loopback hop). Now, with `containarium sentinel --proxy-protocol` and `containarium daemon --proxy-protocol --proxy-protocol-trusted=<sender-CIDR>`, every hop carries a PROXY v2 header so the daemon's HTTP server can recover the real client address and emit an accurate `X-Forwarded-For` to upstream containers. See [docs/PROXY-PROTOCOL.md](docs/PROXY-PROTOCOL.md). ([#105](https://github.com/FootprintAI/Containarium/pull/105), [#106](https://github.com/FootprintAI/Containarium/pull/106), [#107](https://github.com/FootprintAI/Containarium/pull/107), [#108](https://github.com/FootprintAI/Containarium/pull/108))
+  - **Sentinel side** (#105): `WriteProxyV2` hand-rolled IPv4/IPv6 PROXY v2 encoder; `--proxy-protocol` CLI flag (off by default); header injected in `buildSNIRoutingHandler` before the bidirectional `io.Copy`. Covers all three forwarding sub-paths (yamux tunnel, in-VPC TCP dial, fallback). Real-Caddy e2e gated by `proxyproto_real_caddy` build tag; CI workflow `proxyproto-e2e.yml`.
+  - **Daemon srv0 wrapper** (#106): `--proxy-protocol` and `--proxy-protocol-trusted` CLI flags; `ProxyManager.EnableProxyProtocol(trustedCIDRs)` installs a `[proxy_protocol, tls]` `listener_wrappers` chain plus `trusted_proxies` on the running Caddy. Empty/wildcard CIDR lists are rejected. Uses atomic `getFullConfig` + `loadConfig` so other srv0 fields (`listen`, `routes`, `automatic_https`, etc.) are preserved.
+  - **Daemon caddy-l4 wrapping-aware lifecycle** (#107): the L4 server is produced in pattern B shape (one outer route with handlers `[layer4.handlers.proxy_protocol, layer4.handlers.subroute]`) when `--proxy-protocol` is set. `ActivateL4`, `getRoutes`, `putRoutes` are all wrapping-aware so `RouteSyncJob`'s CRUD operations on the inner subroute don't undo the wrapper. SNI passthrough routes inside the subroute keep working both with and without a leading PROXY header (deploy-gap safe). Catchall to the HTTP server emits `proxy_protocol: "v2"` so srv0's listener_wrapper can recover the source.
+
 ## [0.16.2] - 2026-05-08
 
 ### Fixed
