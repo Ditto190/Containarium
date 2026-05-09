@@ -13,11 +13,11 @@ connection downstream.
 The PROXY protocol (HAProxy v2, binary) is the standard solution: every hop
 prepends a tiny header carrying the original source/destination addresses,
 and the receiver parses it before doing anything else. With the implementation
-in this codebase, a curl from `36.230.33.180` lands in the WordPress nginx
+in this codebase, a curl from `203.0.113.42` lands in the WordPress nginx
 access log as:
 
 ```
-10.0.3.111 - - [...] "GET / HTTP/1.1" 200 ... "User-Agent" "36.230.33.180"
+10.0.3.111 - - [...] "GET / HTTP/1.1" 200 ... "User-Agent" "203.0.113.42"
                                                             ^^^^^^^^^^^^^^
                                                 X-Forwarded-For = real IP
 ```
@@ -53,7 +53,7 @@ configuration:
    - The `proxy_protocol` handler consumes the PROXY v2 bytes (lenient if
      absent — passes through unchanged for deploy-gap safety), then the
      `subroute` does SNI matching on the now-clean TLS bytes.
-   - SNI passthrough routes (e.g. `grpc.kafeido.app`) forward raw TLS to
+   - SNI passthrough routes (e.g. `passthrough-a.example`) forward raw TLS to
      their gRPC backends untouched.
    - The catchall route (no `match`) re-emits a PROXY v2 header to
      `localhost:8443` (`srv0`) using `proxy_protocol: "v2"` on its proxy
@@ -91,12 +91,12 @@ peer.
 
 | Wrapper | Sees connections from | Allow CIDRs (prod) |
 |---|---|---|
-| caddy-l4 `proxy_protocol` handler | sentinel (via host iptables DNAT, source preserved) | `10.130.0.13/32` (sentinel VPC IP) |
+| caddy-l4 `proxy_protocol` handler | sentinel (via host iptables DNAT, source preserved) | `<sentinel-VPC-IP>/32` (sentinel VPC IP) |
 | srv0 `proxy_protocol` listener_wrapper | caddy-l4 (loopback dial to `localhost:8443`) | `127.0.0.0/8`, `::1/128` |
 
 Concretely the daemon is started with:
 ```
---proxy-protocol --proxy-protocol-trusted=10.130.0.13/32,127.0.0.0/8,::1/128
+--proxy-protocol --proxy-protocol-trusted=<sentinel-VPC-IP>/32,127.0.0.0/8,::1/128
 ```
 and the sentinel with:
 ```
@@ -161,16 +161,16 @@ The wrapped shape produced by `EnableL4ProxyProtocol`:
     "handle": [
       {
         "handler": "proxy_protocol",
-        "allow":   ["10.130.0.13/32", "127.0.0.0/8", "::1/128"],
+        "allow":   ["<sentinel-VPC-IP>/32", "127.0.0.0/8", "::1/128"],
         "timeout": "5s"
       },
       {
         "handler": "subroute",
         "routes": [
-          {"match": [{"tls": {"sni": ["grpc.kafeido.app"]}}],
-           "handle": [{"handler": "proxy", "upstreams": [{"dial": ["10.0.3.248:50051"]}]}]},
-          {"match": [{"tls": {"sni": ["grpc-dev.kafeido.app"]}}],
-           "handle": [{"handler": "proxy", "upstreams": [{"dial": ["10.0.3.250:50052"]}]}]},
+          {"match": [{"tls": {"sni": ["passthrough-a.example"]}}],
+           "handle": [{"handler": "proxy", "upstreams": [{"dial": ["203.0.113.1:50051"]}]}]},
+          {"match": [{"tls": {"sni": ["passthrough-b.example"]}}],
+           "handle": [{"handler": "proxy", "upstreams": [{"dial": ["203.0.113.2:50052"]}]}]},
           {"handle": [{"handler": "proxy",
                        "upstreams": [{"dial": ["localhost:8443"]}],
                        "proxy_protocol": "v2"}]}
@@ -208,10 +208,10 @@ Added by `ProxyManager.EnableProxyProtocol`:
         "srv0": {
           "listen": [":80", ":8443"],
           "listener_wrappers": [
-            {"wrapper": "proxy_protocol", "allow": ["10.130.0.13/32", "127.0.0.0/8", "::1/128"], "timeout": "5s"},
+            {"wrapper": "proxy_protocol", "allow": ["<sentinel-VPC-IP>/32", "127.0.0.0/8", "::1/128"], "timeout": "5s"},
             {"wrapper": "tls"}
           ],
-          "trusted_proxies": {"source": "static", "ranges": ["10.130.0.13/32", "127.0.0.0/8", "::1/128"]},
+          "trusted_proxies": {"source": "static", "ranges": ["<sentinel-VPC-IP>/32", "127.0.0.0/8", "::1/128"]},
           "routes": [...preserved verbatim...],
           ...
         }
