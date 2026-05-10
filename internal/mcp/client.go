@@ -213,6 +213,29 @@ func (c *Client) AddRoute(req AddRouteRequest) (*AddRouteResponse, error) {
 	return &resp, nil
 }
 
+// ListBackends returns the cluster topology — the local daemon plus any
+// tunnel-connected peers. Used by the list_backends MCP tool so an
+// agent can reason about peer health, container counts, and GPU
+// inventory without inferring topology from container IPs.
+//
+// Note: at the time of writing, /v1/backends is served by a hand-coded
+// handler (not grpc-gateway) and does NOT require authentication. The
+// MCP client still sends its JWT — server ignores it — so the day the
+// endpoint gains auth, this client doesn't need to change.
+func (c *Client) ListBackends() (*ListBackendsResponse, error) {
+	respBody, err := c.doRequest("GET", "/v1/backends", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp ListBackendsResponse
+	if err := json.Unmarshal(respBody, &resp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	return &resp, nil
+}
+
 // API Request/Response types
 
 type CreateContainerRequest struct {
@@ -268,6 +291,34 @@ type GetMetricsResponse struct {
 
 type GetSystemInfoResponse struct {
 	Info SystemInfo `json:"info"`
+}
+
+// ListBackendsResponse mirrors the hand-coded /v1/backends handler. The
+// shape isn't proto-generated, so JSON tag conventions follow what the
+// handler emits (camelCase, not snake_case). int64 fields here are
+// emitted as numbers (the handler is hand-coded, not grpc-gateway), so
+// no `,string` tags needed.
+type ListBackendsResponse struct {
+	Backends []Backend `json:"backends"`
+}
+
+type Backend struct {
+	ID             string       `json:"id"`
+	Type           string       `json:"type"` // "local" or "tunnel"
+	Healthy        bool         `json:"healthy"`
+	Version        string       `json:"version,omitempty"`
+	Hostname       string       `json:"hostname,omitempty"`
+	UptimeSeconds  int64        `json:"uptimeSeconds,omitempty"`
+	LastSeenAt     string       `json:"lastSeenAt,omitempty"`
+	OS             string       `json:"os,omitempty"`
+	ContainerCount int32        `json:"containerCount"`
+	GPUs           []BackendGPU `json:"gpus,omitempty"`
+}
+
+type BackendGPU struct {
+	Vendor    string `json:"vendor,omitempty"`
+	ModelName string `json:"modelName,omitempty"`
+	VRAMBytes int64  `json:"vramBytes,omitempty"`
 }
 
 // AddRouteRequest mirrors network.proto's AddRouteRequest. JSON field
