@@ -574,14 +574,9 @@ and your data on your infra.
 
 ## Roadmap
 
-The OSS roadmap is driven by the
-[Containarium-cloud](https://github.com/FootprintAI/Containarium-cloud)
-private repo (private because it carries cloud-product context that we
-don't lead with publicly). Public-facing OSS items:
-
-- **Q2 2026 (in flight)**: agent-box MCP, ssh-config CLI,
-  expose-port CLI, demo recording.
-- **Q3 2026**: agent-box tier-2 (MCP Roots, background process
+- **Q2 2026 (in flight)**: `agent-box` MCP, `ssh-config` CLI,
+  `expose-port` CLI, demo recording.
+- **Q3 2026**: `agent-box` tier-2 (MCP Roots, background process
   management), demo-driven docs and examples.
 - **Q4 2026**: OSS v1.0 cut — stable API surface, contribution
   guide.
