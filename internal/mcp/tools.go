@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/footprintai/containarium/internal/expose"
 )
@@ -170,6 +171,19 @@ func (s *Server) registerTools() {
 				"properties": map[string]interface{}{},
 			},
 			Handler: handleGetSystemInfo,
+		},
+		{
+			Name: "list_backends",
+			Description: "List the cluster's backend hosts (the local daemon plus any " +
+				"tunnel-connected peers). Returns id, type (local/tunnel), health, " +
+				"hostname, OS, container count, and GPU inventory per backend. Use " +
+				"this when the agent needs to reason about peer topology — e.g. " +
+				"\"which host has GPU capacity?\" or \"is peer X healthy?\".",
+			InputSchema: map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+			Handler: handleListBackends,
 		},
 		{
 			Name: "expose_port",
@@ -395,6 +409,86 @@ func handleGetSystemInfo(client *Client, args map[string]interface{}) (string, e
 	result += fmt.Sprintf("  Total: %d\n", resp.Info.ContainersTotal)
 
 	return result, nil
+}
+
+func handleListBackends(client *Client, args map[string]interface{}) (string, error) {
+	resp, err := client.ListBackends()
+	if err != nil {
+		return "", fmt.Errorf("failed to list backends: %w", err)
+	}
+	if len(resp.Backends) == 0 {
+		return "No backends registered (running standalone, no peers).", nil
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Found %d backend(s):\n\n", len(resp.Backends))
+	for _, bk := range resp.Backends {
+		health := "✓ healthy"
+		if !bk.Healthy {
+			health = "✗ unhealthy"
+		}
+		fmt.Fprintf(&b, "🖥️  %s  (%s, %s)\n", bk.ID, bk.Type, health)
+		if bk.Hostname != "" {
+			fmt.Fprintf(&b, "   Hostname:   %s\n", bk.Hostname)
+		}
+		if bk.OS != "" {
+			fmt.Fprintf(&b, "   OS:         %s\n", bk.OS)
+		}
+		if bk.Version != "" {
+			fmt.Fprintf(&b, "   Version:    %s\n", bk.Version)
+		}
+		fmt.Fprintf(&b, "   Containers: %d running\n", bk.ContainerCount)
+		if bk.UptimeSeconds > 0 {
+			fmt.Fprintf(&b, "   Uptime:     %s\n", formatUptime(bk.UptimeSeconds))
+		}
+		if bk.LastSeenAt != "" && bk.Type != "local" {
+			fmt.Fprintf(&b, "   Last seen:  %s\n", bk.LastSeenAt)
+		}
+		if len(bk.GPUs) > 0 {
+			fmt.Fprintf(&b, "   GPUs:\n")
+			for _, g := range bk.GPUs {
+				vram := ""
+				if g.VRAMBytes > 0 {
+					vram = fmt.Sprintf(" — %s VRAM", humanBytes(g.VRAMBytes))
+				}
+				fmt.Fprintf(&b, "     - %s %s%s\n", g.Vendor, g.ModelName, vram)
+			}
+		}
+		b.WriteString("\n")
+	}
+	return b.String(), nil
+}
+
+// formatUptime converts seconds into a human string like "3d4h" or "1h30m".
+// Bias toward terse — agents render this verbatim.
+func formatUptime(seconds int64) string {
+	d := seconds / 86400
+	h := (seconds % 86400) / 3600
+	m := (seconds % 3600) / 60
+	switch {
+	case d > 0:
+		return fmt.Sprintf("%dd%dh", d, h)
+	case h > 0:
+		return fmt.Sprintf("%dh%dm", h, m)
+	default:
+		return fmt.Sprintf("%dm", m)
+	}
+}
+
+// humanBytes formats sizes like "24 GiB" for VRAM, where the source
+// is a power-of-two byte count.
+func humanBytes(n int64) string {
+	const k = 1024
+	switch {
+	case n >= k*k*k*k:
+		return fmt.Sprintf("%.1f TiB", float64(n)/float64(k*k*k*k))
+	case n >= k*k*k:
+		return fmt.Sprintf("%.0f GiB", float64(n)/float64(k*k*k))
+	case n >= k*k:
+		return fmt.Sprintf("%.0f MiB", float64(n)/float64(k*k))
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
 }
 
 func handleExposePort(client *Client, args map[string]interface{}) (string, error) {

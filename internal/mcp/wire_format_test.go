@@ -122,6 +122,40 @@ func TestWireFormat_CreateContainer(t *testing.T) {
 	assert.Equal(t, int64(1771209160), resp.Container.CreatedAt)
 }
 
+func TestWireFormat_ListBackends(t *testing.T) {
+	var resp ListBackendsResponse
+	require.NoError(t, json.Unmarshal(loadFixture(t, "list_backends_response.json"), &resp))
+
+	require.Len(t, resp.Backends, 3)
+
+	// First backend is the local daemon — type "local", healthy, with version.
+	local := resp.Backends[0]
+	assert.Equal(t, "local", local.Type)
+	assert.True(t, local.Healthy)
+	assert.Equal(t, "0.16.4", local.Version)
+	assert.Equal(t, int32(16), local.ContainerCount)
+	// uptimeSeconds is int64 but emitted as a JSON NUMBER here (not a
+	// string) — the /v1/backends handler is hand-coded, not
+	// grpc-gateway, so it doesn't string-encode int64. Confirm decode.
+	assert.Equal(t, int64(345600), local.UptimeSeconds)
+
+	// Second backend is a tunnel peer with a GPU. VRAMBytes is also
+	// int64-as-number, not int64-as-string.
+	gpuPeer := resp.Backends[1]
+	assert.Equal(t, "tunnel", gpuPeer.Type)
+	assert.True(t, gpuPeer.Healthy)
+	require.Len(t, gpuPeer.GPUs, 1)
+	assert.Equal(t, "NVIDIA", gpuPeer.GPUs[0].Vendor)
+	assert.Equal(t, "GeForce RTX 3090", gpuPeer.GPUs[0].ModelName)
+	assert.Equal(t, int64(25769803776), gpuPeer.GPUs[0].VRAMBytes) // 24 GiB
+
+	// Third backend is unhealthy — health flag must round-trip false
+	// (no "omitempty" gotcha eating the field).
+	dead := resp.Backends[2]
+	assert.False(t, dead.Healthy)
+	assert.Equal(t, int32(0), dead.ContainerCount)
+}
+
 // TestWireFormat_AddRoute notes a known mismatch and documents it: our
 // AddRouteResponse.Route declares fields named Domain / ContainerName,
 // but the wire shape from grpc-gateway uses fullDomain / username
