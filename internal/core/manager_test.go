@@ -3,156 +3,13 @@ package core
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/footprintai/containarium/internal/incus"
-	"github.com/lxc/incus/v6/shared/api"
+	"github.com/footprintai/containarium/internal/incus/incustest"
 )
 
-// mockIncusClient is a mock implementation of the incus.Client for testing
-type mockIncusClient struct {
-	containers      map[string]*incus.ContainerInfo
-	createErr       error
-	startErr        error
-	getErr          error
-	deleteErr       error
-	stopErr         error
-	execErr         error
-	waitNetworkIP   string
-	waitNetworkErr  error
-}
-
-func newMockIncusClient() *mockIncusClient {
-	return &mockIncusClient{
-		containers: make(map[string]*incus.ContainerInfo),
-	}
-}
-
-func (m *mockIncusClient) CreateContainer(config incus.ContainerConfig) error {
-	if m.createErr != nil {
-		return m.createErr
-	}
-	m.containers[config.Name] = &incus.ContainerInfo{
-		Name:      config.Name,
-		State:     "Stopped",
-		CPU:       config.CPU,
-		Memory:    config.Memory,
-		CreatedAt: time.Now(),
-	}
-	return nil
-}
-
-func (m *mockIncusClient) StartContainer(name string) error {
-	if m.startErr != nil {
-		return m.startErr
-	}
-	if container, ok := m.containers[name]; ok {
-		container.State = "Running"
-	}
-	return nil
-}
-
-func (m *mockIncusClient) StopContainer(name string, force bool) error {
-	if m.stopErr != nil {
-		return m.stopErr
-	}
-	if container, ok := m.containers[name]; ok {
-		container.State = "Stopped"
-	}
-	return nil
-}
-
-func (m *mockIncusClient) DeleteContainer(name string) error {
-	if m.deleteErr != nil {
-		return m.deleteErr
-	}
-	delete(m.containers, name)
-	return nil
-}
-
-func (m *mockIncusClient) GetContainer(name string) (*incus.ContainerInfo, error) {
-	if m.getErr != nil {
-		return nil, m.getErr
-	}
-	container, ok := m.containers[name]
-	if !ok {
-		return nil, nil
-	}
-	return container, nil
-}
-
-func (m *mockIncusClient) WaitForNetwork(name string, timeout time.Duration) (string, error) {
-	if m.waitNetworkErr != nil {
-		return "", m.waitNetworkErr
-	}
-	if container, ok := m.containers[name]; ok {
-		container.IPAddress = m.waitNetworkIP
-	}
-	return m.waitNetworkIP, nil
-}
-
-func (m *mockIncusClient) Exec(containerName string, command []string) error {
-	return m.execErr
-}
-
-func (m *mockIncusClient) ExecWithOutput(containerName string, command []string) (string, string, error) {
-	return "", "", m.execErr
-}
-
-func (m *mockIncusClient) WriteFile(containerName, path string, content []byte, mode string) error {
-	return nil
-}
-
-func (m *mockIncusClient) ReadFile(containerName, path string) ([]byte, error) {
-	return nil, nil
-}
-
-func (m *mockIncusClient) ListContainers() ([]incus.ContainerInfo, error) {
-	return nil, nil
-}
-
-func (m *mockIncusClient) SetConfig(containerName, key, value string) error {
-	return nil
-}
-
-func (m *mockIncusClient) SetDeviceSize(containerName, deviceName, size string) error {
-	return nil
-}
-
-func (m *mockIncusClient) ResolveGPUInputToPCI(input string) (string, error) {
-	return "", nil
-}
-
-func (m *mockIncusClient) CleanupDisk(containerName string) (string, int64, error) {
-	return "", 0, nil
-}
-
-func (m *mockIncusClient) AddLabel(containerName, key, value string) error {
-	return nil
-}
-
-func (m *mockIncusClient) RemoveLabel(containerName, key string) error {
-	return nil
-}
-
-func (m *mockIncusClient) GetLabels(containerName string) (map[string]string, error) {
-	return nil, nil
-}
-
-func (m *mockIncusClient) SetLabels(containerName string, labels map[string]string) error {
-	return nil
-}
-
-func (m *mockIncusClient) GetServerInfo() (*api.Server, error) {
-	return nil, nil
-}
-
-func (m *mockIncusClient) GetContainerMetrics(name string) (*incus.ContainerMetrics, error) {
-	return nil, nil
-}
-
 func TestNew(t *testing.T) {
-	mockClient := newMockIncusClient()
+	mockClient := incustest.NewMockBackend()
 
 	t.Run("with password", func(t *testing.T) {
 		manager := New(mockClient, "mypassword")
@@ -173,7 +30,7 @@ func TestNew(t *testing.T) {
 }
 
 func TestGetConnectionStrings(t *testing.T) {
-	mockClient := newMockIncusClient()
+	mockClient := incustest.NewMockBackend()
 	manager := New(mockClient, "testpass")
 	manager.coreIP = "10.0.1.50"
 
@@ -211,11 +68,11 @@ func TestGetConnectionStrings(t *testing.T) {
 }
 
 func TestEnsureCoreContainer_ExistingContainer(t *testing.T) {
-	mockClient := newMockIncusClient()
+	mockClient := incustest.NewMockBackend()
 	manager := New(mockClient, "testpass")
 
 	// Pre-create the core container
-	mockClient.containers[CoreContainerName] = &incus.ContainerInfo{
+	mockClient.Containers[CoreContainerName] = &incus.ContainerInfo{
 		Name:      CoreContainerName,
 		State:     "Running",
 		IPAddress: "10.0.1.50",
@@ -237,8 +94,8 @@ func TestEnsureCoreContainer_ExistingContainer(t *testing.T) {
 }
 
 func TestEnsureCoreContainer_CreateNew(t *testing.T) {
-	mockClient := newMockIncusClient()
-	mockClient.waitNetworkIP = "10.0.1.50"
+	mockClient := incustest.NewMockBackend()
+	mockClient.WaitNetworkIP = "10.0.1.50"
 
 	manager := New(mockClient, "testpass")
 
@@ -276,7 +133,7 @@ func TestEnsureCoreContainer_CreateNew(t *testing.T) {
 }
 
 func TestEnsureCoreContainer_AutoCreateDisabled(t *testing.T) {
-	mockClient := newMockIncusClient()
+	mockClient := incustest.NewMockBackend()
 	manager := New(mockClient, "testpass")
 
 	ctx := context.Background()
@@ -291,8 +148,8 @@ func TestEnsureCoreContainer_AutoCreateDisabled(t *testing.T) {
 }
 
 func TestEnsureCoreContainer_DefaultResources(t *testing.T) {
-	mockClient := newMockIncusClient()
-	mockClient.waitNetworkIP = "10.0.1.50"
+	mockClient := incustest.NewMockBackend()
+	mockClient.WaitNetworkIP = "10.0.1.50"
 
 	manager := New(mockClient, "testpass")
 
@@ -322,12 +179,12 @@ func TestEnsureCoreContainer_DefaultResources(t *testing.T) {
 }
 
 func TestDestroy(t *testing.T) {
-	mockClient := newMockIncusClient()
+	mockClient := incustest.NewMockBackend()
 	manager := New(mockClient, "testpass")
 	manager.coreIP = "10.0.1.50"
 
 	// Pre-create the core container
-	mockClient.containers[CoreContainerName] = &incus.ContainerInfo{
+	mockClient.Containers[CoreContainerName] = &incus.ContainerInfo{
 		Name:      CoreContainerName,
 		State:     "Running",
 		IPAddress: "10.0.1.50",
@@ -351,13 +208,13 @@ func TestDestroy(t *testing.T) {
 }
 
 func TestIsHealthy(t *testing.T) {
-	mockClient := newMockIncusClient()
+	mockClient := incustest.NewMockBackend()
 	manager := New(mockClient, "testpass")
 
 	ctx := context.Background()
 
 	t.Run("healthy when container running", func(t *testing.T) {
-		mockClient.containers[CoreContainerName] = &incus.ContainerInfo{
+		mockClient.Containers[CoreContainerName] = &incus.ContainerInfo{
 			Name:      CoreContainerName,
 			State:     "Running",
 			IPAddress: "10.0.1.50",
@@ -369,7 +226,7 @@ func TestIsHealthy(t *testing.T) {
 	})
 
 	t.Run("unhealthy when container not running", func(t *testing.T) {
-		mockClient.containers[CoreContainerName].State = "Stopped"
+		mockClient.Containers[CoreContainerName].State = "Stopped"
 
 		if manager.IsHealthy(ctx) {
 			t.Error("IsHealthy() = true, want false")
@@ -377,7 +234,7 @@ func TestIsHealthy(t *testing.T) {
 	})
 
 	t.Run("unhealthy when container doesn't exist", func(t *testing.T) {
-		delete(mockClient.containers, CoreContainerName)
+		delete(mockClient.Containers, CoreContainerName)
 
 		if manager.IsHealthy(ctx) {
 			t.Error("IsHealthy() = true, want false")
@@ -386,13 +243,13 @@ func TestIsHealthy(t *testing.T) {
 }
 
 func TestHealthCheck(t *testing.T) {
-	mockClient := newMockIncusClient()
+	mockClient := incustest.NewMockBackend()
 	manager := New(mockClient, "testpass")
 
 	ctx := context.Background()
 
 	t.Run("pass when running", func(t *testing.T) {
-		mockClient.containers[CoreContainerName] = &incus.ContainerInfo{
+		mockClient.Containers[CoreContainerName] = &incus.ContainerInfo{
 			Name:      CoreContainerName,
 			State:     "Running",
 			IPAddress: "10.0.1.50",
@@ -409,7 +266,7 @@ func TestHealthCheck(t *testing.T) {
 	})
 
 	t.Run("fail when stopped", func(t *testing.T) {
-		mockClient.containers[CoreContainerName].State = "Stopped"
+		mockClient.Containers[CoreContainerName].State = "Stopped"
 
 		err := manager.healthCheck(ctx)
 		if err == nil {
@@ -418,7 +275,7 @@ func TestHealthCheck(t *testing.T) {
 	})
 
 	t.Run("fail when not found", func(t *testing.T) {
-		delete(mockClient.containers, CoreContainerName)
+		delete(mockClient.Containers, CoreContainerName)
 
 		err := manager.healthCheck(ctx)
 		if err == nil {
@@ -429,7 +286,7 @@ func TestHealthCheck(t *testing.T) {
 
 // Benchmark tests
 func BenchmarkGetConnectionStrings(b *testing.B) {
-	mockClient := newMockIncusClient()
+	mockClient := incustest.NewMockBackend()
 	manager := New(mockClient, "testpass")
 	manager.coreIP = "10.0.1.50"
 
