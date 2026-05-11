@@ -34,16 +34,17 @@ func (s *Server) registerTools() {
 				"path expected by the rest of the workflow. If you pass `ssh_keys`, those " +
 				"are used as-is and no ephemeral key is generated (useful when reusing an " +
 				"operator's existing key for SSH alias convenience).\n\n" +
-				"AFTER creation, to operate inside the container:\n" +
+				"AFTER creation, to operate inside the container (simplest path):\n" +
 				"  1. Save the ephemeral private key (if generated) via Bash to\n" +
 				"     ~/.containarium/keys/<name> with mode 0600.\n" +
-				"  2. Call the `sync_ssh_config` MCP tool to wire the SSH alias.\n" +
-				"     Pass identity_file=~/.containarium/keys/<name> so ssh uses the new key.\n" +
-				"  3. Add `Include ~/.containarium/ssh_config` to ~/.ssh/config once per\n" +
-				"     machine (one-time operator step; agents should remind the user).\n" +
-				"  4. `ssh <name>` from Bash reaches the container. Use it to apt install,\n" +
-				"     write files, start services.\n" +
-				"  5. Call `expose_port` to make a container port reachable on a public hostname.",
+				"  2. The tool response includes a ready-to-paste ssh command:\n" +
+				"       ssh -i ~/.containarium/keys/<name> <name>@<sentinel-host>\n" +
+				"     Use Bash to run it. No edits to ~/.ssh/config required.\n" +
+				"  3. Inside the container, apt install / write files / start services.\n" +
+				"  4. Call `expose_port` to make a container port reachable on a public hostname.\n\n" +
+				"Optional convenience (skip if you don't want to touch ~/.ssh/config):\n" +
+				"  Call the `sync_ssh_config` MCP tool to generate a self-contained\n" +
+				"  ssh_config file and Include line. After that, `ssh <name>` works directly.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -373,8 +374,16 @@ func handleCreateContainer(client *Client, args map[string]interface{}) (string,
 		result += "Suggested save path:\n"
 		result += fmt.Sprintf("  ~/.containarium/keys/%s\n\n", resp.Container.Username)
 		result += "Then to SSH in:\n"
-		result += fmt.Sprintf("  ssh -i ~/.containarium/keys/%s %s@<sentinel-host>\n", resp.Container.Username, resp.Container.Username)
-		result += "(or run `containarium ssh-config sync` and `ssh " + resp.Container.Username + "` directly)\n\n"
+		sentinelHost := client.SentinelHost
+		if sentinelHost == "" {
+			sentinelHost = "<sentinel-host>"
+		}
+		result += fmt.Sprintf("  ssh -i ~/.containarium/keys/%s %s@%s\n\n",
+			resp.Container.Username, resp.Container.Username, sentinelHost)
+		if client.SentinelHost == "" {
+			result += "(Sentinel host not configured — set CONTAINARIUM_SENTINEL_HOST in the\n"
+			result += "MCP server's env, or call sync_ssh_config for an alias-based setup.)\n\n"
+		}
 		result += string(ephemeralPrivKey)
 	}
 
