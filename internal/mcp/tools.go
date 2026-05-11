@@ -35,12 +35,15 @@ func (s *Server) registerTools() {
 				"are used as-is and no ephemeral key is generated (useful when reusing an " +
 				"operator's existing key for SSH alias convenience).\n\n" +
 				"AFTER creation, to operate inside the container:\n" +
-				"  1. Save the ephemeral private key (if generated) to ~/.containarium/keys/<name>.\n" +
-				"  2. Run `containarium ssh-config sync --server $CONTAINARIUM_SERVER_URL --token $CONTAINARIUM_JWT_TOKEN` to wire the SSH alias.\n" +
-				"  3. Add `Include ~/.containarium/ssh_config` to `~/.ssh/config` if not present.\n" +
-				"  4. `ssh -i ~/.containarium/keys/<name> <name>` reaches the container.\n" +
-				"     Use it via Bash to apt install, write files, start services.\n" +
-				"  5. Call expose_port to make a container port reachable on a public hostname.",
+				"  1. Save the ephemeral private key (if generated) via Bash to\n" +
+				"     ~/.containarium/keys/<name> with mode 0600.\n" +
+				"  2. Call the `sync_ssh_config` MCP tool to wire the SSH alias.\n" +
+				"     Pass identity_file=~/.containarium/keys/<name> so ssh uses the new key.\n" +
+				"  3. Add `Include ~/.containarium/ssh_config` to ~/.ssh/config once per\n" +
+				"     machine (one-time operator step; agents should remind the user).\n" +
+				"  4. `ssh <name>` from Bash reaches the container. Use it to apt install,\n" +
+				"     write files, start services.\n" +
+				"  5. Call `expose_port` to make a container port reachable on a public hostname.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -220,6 +223,44 @@ func (s *Server) registerTools() {
 				"required": []string{"id"},
 			},
 			Handler: handleGetBackend,
+		},
+		{
+			Name: "sync_ssh_config",
+			Description: "Generate a self-contained ssh_config covering every reachable container " +
+				"and write it to ~/.containarium/ssh_config. After this call, `ssh <username>` " +
+				"works from any shell — no CLI install required.\n\n" +
+				"Call this right after create_container so the new container's SSH alias is " +
+				"available immediately. The first time you use it, you also need to add a single " +
+				"line to your ~/.ssh/config to wire it in:\n" +
+				"  Include ~/.containarium/ssh_config\n" +
+				"That's a one-time setup; subsequent sync calls just refresh the file.\n\n" +
+				"Two modes:\n" +
+				"  - Direct (default): each container's IP is the SSH HostName. Works when the " +
+				"    container's LAN IP is reachable from where you're running ssh.\n" +
+				"  - Via sentinel (set `sentinel`): all containers route through the sentinel " +
+				"    via sshpiper. Use this when containers don't have public IPs.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"sentinel": map[string]interface{}{
+						"type":        "string",
+						"description": "Sentinel SSH endpoint (e.g. sentinel.example.com or sentinel.example.com:2222). Empty = direct mode.",
+					},
+					"identity_file": map[string]interface{}{
+						"type":        "string",
+						"description": "IdentityFile path to render in every Host block. For ephemeral-keypair containers, agents typically pass ~/.containarium/keys/<username>.",
+					},
+					"include_stopped": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Include stopped containers in the config. Default false (only running containers).",
+					},
+					"out": map[string]interface{}{
+						"type":        "string",
+						"description": "Output path override. Default: ~/.containarium/ssh_config.",
+					},
+				},
+			},
+			Handler: handleSyncSSHConfig,
 		},
 		{
 			Name: "expose_port",
