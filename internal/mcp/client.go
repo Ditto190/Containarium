@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -14,8 +15,19 @@ import (
 // of non-HTTP deployment metadata (SentinelHost) so tool handlers that
 // need it can read it without a separate config plumbing layer.
 type Client struct {
-	baseURL    string
-	jwtToken   string
+	baseURL string
+
+	// jwtToken is the static token used when jwtTokenFile is empty.
+	// Captured at NewClient time; doesn't survive operator-side
+	// rotation without an MCP restart.
+	jwtToken string
+
+	// jwtTokenFile, when set, is the path the client reads the JWT
+	// from on every request. Operators rotating the token can just
+	// overwrite the file in place — the next call picks up the new
+	// content. Empty falls back to jwtToken.
+	jwtTokenFile string
+
 	httpClient *http.Client
 
 	// SentinelHost, when set, is the public SSH endpoint for this
@@ -37,6 +49,34 @@ func NewClient(baseURL, jwtToken string) *Client {
 	}
 }
 
+// SetTokenFile switches the client to file-based token mode: every
+// request re-reads `path` to get the current JWT. Empty disables
+// file mode and falls back to the static jwtToken captured at
+// NewClient time. Used by the MCP server when the operator set
+// CONTAINARIUM_JWT_TOKEN_FILE.
+func (c *Client) SetTokenFile(path string) {
+	c.jwtTokenFile = path
+}
+
+// readToken returns the JWT to use for the next request. When a
+// tokenFile is configured, reads it fresh from disk (whitespace
+// trimmed) on every call so token rotation works without a restart.
+// Otherwise returns the static token captured at construction.
+func (c *Client) readToken() (string, error) {
+	if c.jwtTokenFile == "" {
+		return c.jwtToken, nil
+	}
+	b, err := os.ReadFile(c.jwtTokenFile)
+	if err != nil {
+		return "", fmt.Errorf("read JWT from %s: %w", c.jwtTokenFile, err)
+	}
+	token := strings.TrimSpace(string(b))
+	if token == "" {
+		return "", fmt.Errorf("JWT file %s is empty", c.jwtTokenFile)
+	}
+	return token, nil
+}
+
 // doRequest performs an HTTP request with JWT authentication
 func (c *Client) doRequest(method, path string, body interface{}) ([]byte, error) {
 	url := c.baseURL + path
@@ -55,8 +95,13 @@ func (c *Client) doRequest(method, path string, body interface{}) ([]byte, error
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	// Add JWT token
-	req.Header.Set("Authorization", "Bearer "+c.jwtToken)
+	// Add JWT token. readToken() may re-read from disk if a token file
+	// was configured — that's the file-rotation-without-restart path.
+	token, err := c.readToken()
+	if err != nil {
+		return nil, fmt.Errorf("authenticate: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)

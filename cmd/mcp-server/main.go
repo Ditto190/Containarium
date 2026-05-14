@@ -21,9 +21,9 @@ func main() {
 		printUsage()
 		log.Fatal("CONTAINARIUM_SERVER_URL environment variable is required")
 	}
-	if config.JWTToken == "" {
+	if config.JWTToken == "" && config.JWTTokenFile == "" {
 		printUsage()
-		log.Fatal("CONTAINARIUM_JWT_TOKEN environment variable is required")
+		log.Fatal("either CONTAINARIUM_JWT_TOKEN or CONTAINARIUM_JWT_TOKEN_FILE environment variable is required")
 	}
 
 	// Create MCP server with protobuf-defined contracts
@@ -50,11 +50,15 @@ func printUsage() {
 	log.Println("=== Containarium MCP Server Configuration ===")
 	log.Println("")
 	log.Println("Required environment variables:")
-	log.Println("  CONTAINARIUM_SERVER_URL - URL of the Containarium REST API (e.g., http://localhost:8080)")
-	log.Println("  CONTAINARIUM_JWT_TOKEN  - JWT token for authentication")
+	log.Println("  CONTAINARIUM_SERVER_URL      - URL of the Containarium REST API (e.g., http://localhost:8080)")
+	log.Println("  CONTAINARIUM_JWT_TOKEN       - JWT token for authentication  (use one or the other)")
+	log.Println("  CONTAINARIUM_JWT_TOKEN_FILE  - Path to a file with the JWT — re-read on every request,")
+	log.Println("                                 so rotating the token is `mv newtoken oldpath`. Prefer this")
+	log.Println("                                 for long-running MCP processes that need to survive rotation.")
 	log.Println("")
 	log.Println("Optional environment variables:")
-	log.Println("  CONTAINARIUM_DEBUG      - Enable debug logging (true/false)")
+	log.Println("  CONTAINARIUM_DEBUG           - Enable debug logging (true/false)")
+	log.Println("  CONTAINARIUM_SENTINEL_HOST   - Public SSH endpoint, shown in create_container responses")
 	log.Println("")
 	log.Println("Example usage:")
 	log.Println("  export CONTAINARIUM_SERVER_URL='http://localhost:8080'")
