@@ -692,6 +692,98 @@ func TestProxyManager_EnsureHTTPApp_AcceptsExistingConfigWithHandlers(t *testing
 	}
 }
 
+// TestProxyManager_RemoveTLSSubject_StripsFromAllPolicies covers the
+// container-delete cascade case (#69): when a container is deleted, its
+// hostname must come out of Caddy's TLS automation subjects so Caddy
+// stops trying to ACME-renew an orphaned cert.
+func TestProxyManager_RemoveTLSSubject_StripsFromAllPolicies(t *testing.T) {
+	gone := "helloworld.demo.containarium.dev"
+	var gotPolicies []map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/config/apps/tls/automation/policies":
+			_, _ = w.Write([]byte(`[
+				{"subjects": ["keep.example.com", "helloworld.demo.containarium.dev", "also.example.com"]},
+				{"subjects": ["another.example.com", "helloworld.demo.containarium.dev"]}
+			]`))
+		case r.Method == http.MethodPatch && r.URL.Path == "/config/apps/tls/automation/policies":
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &gotPolicies)
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer srv.Close()
+
+	pm := NewProxyManager(srv.URL, "demo.containarium.dev")
+	if err := pm.RemoveTLSSubject(gone); err != nil {
+		t.Fatalf("RemoveTLSSubject err = %v", err)
+	}
+
+	if len(gotPolicies) != 2 {
+		t.Fatalf("expected 2 policies in PATCH body, got %d", len(gotPolicies))
+	}
+	for i, p := range gotPolicies {
+		subs, _ := p["subjects"].([]interface{})
+		for _, s := range subs {
+			if s == gone {
+				t.Errorf("policy %d still contains %q after RemoveTLSSubject", i, gone)
+			}
+		}
+	}
+	// First policy had 3 subjects originally with one to drop → expect 2 left
+	if subs, _ := gotPolicies[0]["subjects"].([]interface{}); len(subs) != 2 {
+		t.Errorf("first policy expected 2 subjects after, got %d (%v)", len(subs), subs)
+	}
+	// Second had 2 → expect 1 left
+	if subs, _ := gotPolicies[1]["subjects"].([]interface{}); len(subs) != 1 {
+		t.Errorf("second policy expected 1 subject after, got %d (%v)", len(subs), subs)
+	}
+}
+
+// TestProxyManager_RemoveTLSSubject_NoOpWhenAbsent covers the case
+// where the cascade is called for a container whose route was never
+// ACME-provisioned (e.g. expose_port was never called). Must not error
+// and must not PATCH (avoiding noise in the Caddy config history).
+func TestProxyManager_RemoveTLSSubject_NoOpWhenAbsent(t *testing.T) {
+	patchCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/config/apps/tls/automation/policies":
+			_, _ = w.Write([]byte(`[{"subjects": ["only.example.com"]}]`))
+		case r.Method == http.MethodPatch:
+			patchCount++
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer srv.Close()
+
+	pm := NewProxyManager(srv.URL, "")
+	if err := pm.RemoveTLSSubject("not-present.example.com"); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if patchCount != 0 {
+		t.Errorf("expected no PATCH when subject is absent, got %d", patchCount)
+	}
+}
+
+// TestProxyManager_RemoveTLSSubject_HandlesNullConfig covers a fresh
+// Caddy with no TLS app configured yet. Should return nil silently.
+func TestProxyManager_RemoveTLSSubject_HandlesNullConfig(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Caddy returns "null\n" for missing config paths
+		_, _ = w.Write([]byte("null\n"))
+	}))
+	defer srv.Close()
+
+	pm := NewProxyManager(srv.URL, "")
+	if err := pm.RemoveTLSSubject("anything.example.com"); err != nil {
+		t.Errorf("expected nil on null config, got %v", err)
+	}
+}
+
 func TestProxyManager_EnableProxyProtocol_RefusesEmpty(t *testing.T) {
 	pm := NewProxyManager("http://unreachable", "kafeido.app")
 	if err := pm.EnableProxyProtocol(nil); err == nil {

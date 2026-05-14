@@ -167,6 +167,76 @@ func (p *ProxyManager) addRouteWithProtocol(subdomain, containerIP string, port 
 	return nil
 }
 
+// RemoveTLSSubject strips `domain` from every TLS automation policy's
+// `subjects` list. Used by the container-delete cascade: once a container
+// is gone, Caddy should stop trying to ACME-renew its hostname's cert
+// (otherwise it'll keep hitting Let's Encrypt with no upstream to
+// challenge, slowly burning rate-limit budget).
+//
+// No-op if `domain` isn't in any subjects list. Leaves an empty policy
+// in place if `domain` was the only subject — that's harmless (Caddy
+// just has nothing to do for it) and avoids the complexity of deciding
+// whether to delete the entire policy entry (which might be the only
+// reference to the ACME issuers config).
+func (p *ProxyManager) RemoveTLSSubject(domain string) error {
+	url := fmt.Sprintf("%s/config/apps/tls/automation/policies", p.caddyAdminURL)
+	resp, err := p.httpClient.Get(url)
+	if err != nil {
+		return fmt.Errorf("get TLS policies: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusBadRequest {
+		// No TLS app configured; nothing to remove.
+		return nil
+	}
+
+	var policies []CaddyTLSAutomationPolicy
+	body, _ := io.ReadAll(resp.Body)
+	if len(bytes.TrimSpace(body)) == 0 || string(bytes.TrimSpace(body)) == "null" {
+		return nil
+	}
+	if err := json.Unmarshal(body, &policies); err != nil {
+		return fmt.Errorf("decode TLS policies: %w", err)
+	}
+
+	changed := false
+	for i := range policies {
+		filtered := policies[i].Subjects[:0]
+		for _, s := range policies[i].Subjects {
+			if s == domain {
+				changed = true
+				continue
+			}
+			filtered = append(filtered, s)
+		}
+		policies[i].Subjects = filtered
+	}
+	if !changed {
+		return nil
+	}
+
+	out, err := json.Marshal(policies)
+	if err != nil {
+		return fmt.Errorf("marshal TLS policies: %w", err)
+	}
+	req, err := http.NewRequest("PATCH", url, bytes.NewReader(out))
+	if err != nil {
+		return fmt.Errorf("build PATCH request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	patchResp, err := p.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("patch TLS policies: %w", err)
+	}
+	defer patchResp.Body.Close()
+	if patchResp.StatusCode != http.StatusOK {
+		errBody, _ := io.ReadAll(patchResp.Body)
+		return fmt.Errorf("caddy returned %d patching TLS policies: %s", patchResp.StatusCode, string(errBody))
+	}
+	return nil
+}
+
 // ProvisionTLS provisions a TLS certificate for the given domain via Caddy's on-demand TLS
 // or by adding it to the TLS automation policy
 func (p *ProxyManager) ProvisionTLS(domain string) error {
