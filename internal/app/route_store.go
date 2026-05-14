@@ -274,6 +274,50 @@ func (s *RouteStore) Delete(ctx context.Context, fullDomain string) error {
 	return nil
 }
 
+// ListByContainer returns every route whose ContainerName matches.
+// Used by the container-delete cascade so a deleted container doesn't
+// leave dangling routes in the store (which RouteSyncJob would otherwise
+// keep re-installing into Caddy on its next tick, producing 502s on
+// the public hostname).
+func (s *RouteStore) ListByContainer(ctx context.Context, containerName string) ([]*RouteRecord, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, subdomain, full_domain, target_ip, target_port, protocol,
+			COALESCE(container_name, ''), app_id, COALESCE(description, ''), active,
+			created_by, created_at, updated_at
+		FROM routes
+		WHERE container_name = $1
+		ORDER BY created_at ASC
+	`, containerName)
+	if err != nil {
+		return nil, fmt.Errorf("query routes by container: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*RouteRecord
+	for rows.Next() {
+		route := &RouteRecord{}
+		if err := rows.Scan(
+			&route.ID,
+			&route.Subdomain,
+			&route.FullDomain,
+			&route.TargetIP,
+			&route.TargetPort,
+			&route.Protocol,
+			&route.ContainerName,
+			&route.AppID,
+			&route.Description,
+			&route.Active,
+			&route.CreatedBy,
+			&route.CreatedAt,
+			&route.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan route: %w", err)
+		}
+		out = append(out, route)
+	}
+	return out, rows.Err()
+}
+
 // DeleteByAppID removes all routes associated with an app
 func (s *RouteStore) DeleteByAppID(ctx context.Context, appID string) error {
 	query := "DELETE FROM routes WHERE app_id = $1"

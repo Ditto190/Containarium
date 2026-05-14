@@ -53,6 +53,12 @@ type ContainerServer struct {
 	coreServices         *CoreServices
 	daemonConfigStore    *app.DaemonConfigStore
 	peerPool             *PeerPool
+	// Route / Caddy cleanup deps (set by DualServer wiring, may be nil if
+	// the daemon was started without --app-hosting). Used by DeleteContainer
+	// to cascade-remove the routes / TLS-automation subjects a container
+	// owned, so deleting an LXC actually deletes the public hostname too.
+	routeStore           *app.RouteStore
+	proxyManager         *app.ProxyManager
 	// Guacamole integration for Windows VM RDP access
 	guacamoleClient      *guacamole.Client
 	guacamoleUser        string // Guacamole admin username
@@ -458,6 +464,16 @@ func (s *ContainerServer) DeleteContainer(ctx context.Context, req *pb.DeleteCon
 		return nil, fmt.Errorf("failed to delete container: %w", err)
 	}
 
+	// Cascade-clean the routes + TLS subjects + host user that this
+	// container owned. The LXC is gone above; without these steps the
+	// public hostname returns 502 (Caddy route still points at a
+	// deleted upstream IP) and Caddy keeps trying to ACME-renew an
+	// orphaned cert. All best-effort: any single failure logs a
+	// warning but doesn't block the response — the LXC delete already
+	// succeeded, and partial-cascade is better than telling the caller
+	// "delete failed" when the container is in fact gone.
+	s.cascadeContainerCleanup(ctx, containerName, req.Username)
+
 	// Emit container deleted event
 	s.emitter.EmitContainerDeleted(containerName)
 
@@ -465,6 +481,61 @@ func (s *ContainerServer) DeleteContainer(ctx context.Context, req *pb.DeleteCon
 		Message:       fmt.Sprintf("Container for user %s deleted successfully", req.Username),
 		ContainerName: containerName,
 	}, nil
+}
+
+// cascadeContainerCleanup removes the resources that DeleteContainer's
+// LXC-delete leaves behind. Documented as #69 / verified live against
+// the demo cluster on 2026-05-14.
+//
+// Order is deliberate:
+//   1. Route store first — kills the source of truth so RouteSyncJob
+//      will reap the Caddy srv0 route on its next tick (5s). Deleting
+//      directly from Caddy without this step lets the sync job
+//      resurrect the route within seconds, producing the 502-after-
+//      delete trap.
+//   2. TLS subject removal — stops Caddy's ACME renewal loop for the
+//      dead hostname. Harmless to keep (no upstream to challenge) but
+//      wastes rate-limit budget over time.
+//   3. Host user (jump-server account) — removes the Linux user, home,
+//      and the containarium-shell wrapper. sshpiper auto-reaps the
+//      user from its own config on the next keysync (2 min).
+//
+// On-disk Caddy cert at /data/caddy/certificates/... is intentionally
+// left in place — it's harmless after step 2 (no renewal attempts) and
+// avoids a "force" mode that the caller probably doesn't want.
+func (s *ContainerServer) cascadeContainerCleanup(ctx context.Context, containerName, username string) {
+	// 1. Route store: enumerate this container's routes and drop each.
+	//    Skip if routeStore was never wired (daemon without app-hosting).
+	if s.routeStore != nil {
+		routes, err := s.routeStore.ListByContainer(ctx, containerName)
+		if err != nil {
+			log.Printf("[delete-cascade] list routes for %s failed: %v", containerName, err)
+		}
+		for _, r := range routes {
+			if err := s.routeStore.Delete(ctx, r.FullDomain); err != nil {
+				log.Printf("[delete-cascade] delete route %s failed: %v", r.FullDomain, err)
+				continue
+			}
+			log.Printf("[delete-cascade] removed route %s (RouteSyncJob will reap Caddy entry)", r.FullDomain)
+
+			// 2. TLS subject: only if we also have a proxy manager.
+			if s.proxyManager != nil {
+				if err := s.proxyManager.RemoveTLSSubject(r.FullDomain); err != nil {
+					log.Printf("[delete-cascade] remove TLS subject %s failed: %v", r.FullDomain, err)
+				} else {
+					log.Printf("[delete-cascade] removed TLS automation subject %s", r.FullDomain)
+				}
+			}
+		}
+	}
+
+	// 3. Host user. DeleteJumpServerAccount is idempotent (no-op if the
+	//    user doesn't exist), so calling it when there isn't one is fine.
+	if err := container.DeleteJumpServerAccount(username, false); err != nil {
+		log.Printf("[delete-cascade] delete host user %s failed: %v (manual: sudo userdel -r %s)", username, err, username)
+	} else {
+		log.Printf("[delete-cascade] removed host user %s", username)
+	}
 }
 
 // StartContainer starts a stopped container
@@ -1087,6 +1158,15 @@ func extractAuthToken(ctx context.Context) string {
 // SetPeerPool sets the peer pool for multi-backend support
 func (s *ContainerServer) SetPeerPool(pool *PeerPool) {
 	s.peerPool = pool
+}
+
+// SetRouteCleanupDeps wires the route store + proxy manager so
+// DeleteContainer can cascade-clean a container's routes + TLS
+// subjects. Both may be nil if the daemon was started without
+// --app-hosting; the cascade will skip those steps gracefully.
+func (s *ContainerServer) SetRouteCleanupDeps(routeStore *app.RouteStore, proxyManager *app.ProxyManager) {
+	s.routeStore = routeStore
+	s.proxyManager = proxyManager
 }
 
 // SetCollaboratorManager sets the collaborator manager for handling collaborator operations

@@ -432,6 +432,10 @@ func NewDualServer(config *DualServerConfig) (*DualServer, error) {
 					networkServer.routeStore = routeStore
 					networkServer.baseDomain = config.BaseDomain
 					log.Printf("Network service updated with app hosting features")
+
+					// ContainerServer also needs route store + proxy
+					// manager so DeleteContainer can cascade-clean.
+					containerServer.SetRouteCleanupDeps(routeStore, proxyManager)
 				}
 
 				// Update TrafficCollector with store for persistence
