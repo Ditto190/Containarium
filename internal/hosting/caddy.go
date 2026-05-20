@@ -339,8 +339,10 @@ func (m *CaddyManager) EnsureCaddyUser() error {
 	}
 
 	// Tighten existing dir mode (in case it was created at 0755
-	// by a previous version). chmod is idempotent.
-	if err := os.Chmod("/var/lib/caddy", 0o750); err != nil {
+	// by a previous version). chmod is idempotent. 0750 is
+	// intentional — the caddy:caddy group needs read access for
+	// the daemon process; world bits stay off.
+	if err := os.Chmod("/var/lib/caddy", 0o750); err != nil { // #nosec G302 -- group access is required for caddy:caddy
 		return fmt.Errorf("chmod caddy home: %w", err)
 	}
 
