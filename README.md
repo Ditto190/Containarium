@@ -18,7 +18,7 @@ curl https://blog.example.com → hello world
 
 [![Containarium demo: prompt → live HTTPS Python app](docs/images/demo-preview.gif)](https://youtu.be/IBDDD_tb8FY)
 
-🎬 **Watch the full 55s demo:** [youtu.be/IBDDD_tb8FY](https://youtu.be/IBDDD_tb8FY) · 🌐 **Live demo:** [helloworld.demo.containarium.dev](https://helloworld.demo.containarium.dev)
+🌐 **Project site:** [containarium.dev](https://containarium.dev) · 🎬 **55s demo:** [youtu.be/IBDDD_tb8FY](https://youtu.be/IBDDD_tb8FY) · 🚀 **Live app:** [helloworld.demo.containarium.dev](https://helloworld.demo.containarium.dev)
 
 ---
 
@@ -689,8 +689,9 @@ Apache License 2.0 — see [LICENSE](LICENSE).
 
 ## Support
 
+- **Project site**: [containarium.dev](https://containarium.dev) — overview, hosted cloud, GitHub Action for CI, PR previews.
 - **Documentation**: [docs/](docs/) directory.
 - **Issues**: [GitHub Issues](https://github.com/footprintai/Containarium/issues).
 - **Demo video**: [55s walkthrough on YouTube](https://youtu.be/IBDDD_tb8FY).
-- **Live demo**: [helloworld.demo.containarium.dev](https://helloworld.demo.containarium.dev).
+- **Live demo app**: [helloworld.demo.containarium.dev](https://helloworld.demo.containarium.dev).
 - **Organization**: [FootprintAI](https://github.com/footprintai).
