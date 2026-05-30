@@ -75,7 +75,7 @@ type Manager struct {
 	keyStore        *KeyStore
 
 	// Tunnel/hybrid mode: ConnMux-based HTTPS handling
-	httpsDispatch  *dispatchListener // from ConnMux, dispatches to proxy or maintenance
+	httpsDispatch *dispatchListener // from ConnMux, dispatches to proxy or maintenance
 
 	// Simple-proxy mode (no ConnMux): userspace TCP forwarder used when
 	// --proxy-protocol is set, so connections to :80/:443 traverse a Go
@@ -107,10 +107,10 @@ type Manager struct {
 	// audit-critical leak (Bearer JWTs in cleartext on peer-to-peer
 	// calls) is only fully closed once the CA is in place and every
 	// daemon is talking to the HTTPS endpoint.
-	pki              *pki.Provisioner
-	sentinelCertPEM  []byte
-	sentinelKeyPEM   []byte
-	pkiMu            sync.RWMutex
+	pki             *pki.Provisioner
+	sentinelCertPEM []byte
+	sentinelKeyPEM  []byte
+	pkiMu           sync.RWMutex
 }
 
 // SetHMACSecret wires the sentinel↔daemon shared HMAC secret. Used
@@ -121,6 +121,14 @@ type Manager struct {
 // depending on its own configuration. See finding C-CRIT-2.
 func (m *Manager) SetHMACSecret(secret []byte) {
 	m.hmacSecret = secret
+}
+
+// HMACSecretConfigured reports whether the sentinel↔daemon HMAC secret
+// is present and long enough. False means every keysync/certsync to the
+// daemons is silently 401ing; the /status endpoint surfaces this so
+// monitoring can alert without scraping logs. See #341.
+func (m *Manager) HMACSecretConfigured() bool {
+	return len(m.hmacSecret) >= auth.SentinelMinSecretLen
 }
 
 // SetCertProvisioner installs the peer-CA the sentinel will use for
@@ -1020,7 +1028,7 @@ func (m *Manager) OnTunnelConnect(spot *TunnelSpot) {
 		IP:           spot.LocalIP,
 		ExternalPort: spot.ExternalPort,
 		Provider:     NewTunnelProvider(nil, spot.ID), // tunnel provider can't restart VMs
-		Priority:     10, // lower priority than GCP for HTTP
+		Priority:     10,                              // lower priority than GCP for HTTP
 		Pool:         spot.Pool,
 	}
 	m.backends.Add(b)
@@ -1098,8 +1106,8 @@ func (m *Manager) OnTunnelDisconnect(spot *TunnelSpot) {
 
 // --- Exported state getters ---
 
-func (m *Manager) CurrentState() State  { return m.currentState() }
-func (m *Manager) PreemptCount() int    { return m.preemptCount }
+func (m *Manager) CurrentState() State       { return m.currentState() }
+func (m *Manager) PreemptCount() int         { return m.preemptCount }
 func (m *Manager) LastPreemption() time.Time { return m.lastPreemption }
 
 // SpotIP returns the primary backend IP (backward compat).
