@@ -31,6 +31,13 @@ type StatusJSON struct {
 	CertSyncCount  int    `json:"cert_sync_count"`
 	CertLastSync   string `json:"cert_last_sync,omitempty"`
 	CertSyncError  string `json:"cert_sync_error,omitempty"`
+	// SentinelAuthMisconfigured is true when CONTAINARIUM_SENTINEL_AUTH_SECRET
+	// is unset or shorter than the minimum, which silently 401s every
+	// keysync/certsync against the daemons. Surfaced here (in addition
+	// to the startup + per-cycle log lines) so monitoring can alert on
+	// it without scraping logs — alert on this being true. #341.
+	SentinelAuthMisconfigured bool   `json:"sentinel_auth_misconfigured"`
+	SentinelAuthDetail        string `json:"sentinel_auth_detail,omitempty"`
 }
 
 // StartBinaryServer starts an HTTP server that serves the containarium binary
@@ -137,6 +144,12 @@ func StartBinaryServer(port int, manager *Manager) (stop func(), err error) {
 		}
 		if err := manager.certStore.LastSyncErr(); err != nil {
 			status.CertSyncError = err.Error()
+		}
+		if !manager.HMACSecretConfigured() {
+			status.SentinelAuthMisconfigured = true
+			status.SentinelAuthDetail = fmt.Sprintf(
+				"CONTAINARIUM_SENTINEL_AUTH_SECRET unset or < %d bytes; keysync/certsync to daemons is failing with 401",
+				auth.SentinelMinSecretLen)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
