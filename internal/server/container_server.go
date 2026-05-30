@@ -1223,6 +1223,11 @@ func (s *ContainerServer) AdoptMigratedContainer(ctx context.Context, req *pb.Ad
 					log.Printf("[adopt] failed to re-stamp %s on %s: %v (continuing — partial OTel beats none)", k, containerName, err)
 				}
 			}
+			// Re-drop the dotenv file at the destination too, so
+			// docker apps pick up the new collector endpoint. #370.
+			if err := s.manager.WriteOTelEnvFile(containerName, envVars); err != nil {
+				log.Printf("[adopt] failed to write env file on %s: %v (continuing)", containerName, err)
+			}
 			log.Printf("[adopt] re-stamped OTel env vars on %s for destination collector", containerName)
 		}
 	}
@@ -1347,11 +1352,21 @@ func (s *ContainerServer) ToggleMonitoring(ctx context.Context, req *pb.ToggleMo
 				return nil, status.Errorf(codes.Internal, "failed to stamp %s: %v", k, err)
 			}
 		}
+		// Also drop the dotenv file so nested docker / docker-compose
+		// apps (which don't inherit the LXC env) can consume the config
+		// via `env_file:`. Best-effort — the Incus-config env above
+		// already covers native-LXC apps. See #370.
+		if err := s.manager.WriteOTelEnvFile(containerName, envVars); err != nil {
+			log.Printf("[togglemonitor] %s: failed to write env file: %v (native-LXC env still stamped)", containerName, err)
+		}
 	} else {
 		for _, k := range otelEnvKeys {
 			if err := s.manager.UnsetEnv(containerName, k); err != nil {
 				return nil, status.Errorf(codes.Internal, "failed to unset %s: %v", k, err)
 			}
+		}
+		if err := s.manager.RemoveOTelEnvFile(containerName); err != nil {
+			log.Printf("[togglemonitor] %s: failed to remove env file: %v", containerName, err)
 		}
 	}
 
@@ -1674,6 +1689,11 @@ func (s *ContainerServer) GetSystemInfo(ctx context.Context, req *pb.GetSystemIn
 		CpuLoad_1Min:         sysResources.CPULoad1Min,
 		CpuLoad_5Min:         sysResources.CPULoad5Min,
 		CpuLoad_15Min:        sysResources.CPULoad15Min,
+		// Advertise where monitoring=true containers ship telemetry so
+		// tenants/agents can point docker-in-LXC apps (which don't
+		// inherit the env-stamped value) at the collector. Empty when
+		// the daemon has no OTel collector. See #370.
+		OtelCollectorEndpoint: s.otelCollectorEndpoint,
 	}
 
 	// Populate GPU info

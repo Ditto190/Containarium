@@ -131,9 +131,19 @@ func (c *Client) doRequest(method, path string, body interface{}) ([]byte, error
 
 	var reqBody io.Reader
 	if body != nil {
-		jsonData, err := json.Marshal(body)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal request: %w", err)
+		// A []byte body is already-encoded JSON — pass it through as-is.
+		// Marshaling it again would wrap the bytes as a base64 JSON
+		// string, which the daemon's grpc-gateway decoder rejects as a
+		// proto syntax error. Several callers (ToggleMonitoring,
+		// SetSecret, ResizeContainer, RefreshSecrets) pre-marshal; this
+		// keeps them correct rather than double-encoding. See #370.
+		jsonData, ok := body.([]byte)
+		if !ok {
+			var err error
+			jsonData, err = json.Marshal(body)
+			if err != nil {
+				return nil, fmt.Errorf("failed to marshal request: %w", err)
+			}
 		}
 		reqBody = bytes.NewReader(jsonData)
 	}
@@ -1116,4 +1126,9 @@ type SystemInfo struct {
 	ContainersStopped int    `json:"containersStopped"`
 	ContainersTotal   int    `json:"containersTotal"`
 	Hostname          string `json:"hostname"`
+	// OTelCollectorEndpoint is where monitoring=true containers ship
+	// OTLP telemetry (e.g. "http://10.0.3.5:4318"). Empty when the
+	// daemon has no OTel collector. Surfaced so an agent can configure
+	// docker-in-LXC apps that don't inherit the env-stamped value. #370.
+	OTelCollectorEndpoint string `json:"otelCollectorEndpoint"`
 }
