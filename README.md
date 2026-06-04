@@ -666,6 +666,20 @@ and your data on your infra.
 
 ---
 
+## In the wild
+
+Where Containarium has been demonstrated live:
+
+- **2026-06-04 — AI Agent Night, Taipei.** When the grand-prize
+  giveaway (a custom vibe-keyboard) hit a snag — the event had no way
+  to run the lucky draw — we fired up Containarium and vibe-coded a
+  lucky-draw picker on the spot to save the giveaway. Still live:
+  [lucky-draw.demo.containarium.dev](https://lucky-draw.demo.containarium.dev/).
+
+Demoed Containarium somewhere? Open a PR and add it here.
+
+---
+
 ## Status
 
 - **Production-deployed** on GCP (multi-region) and bare-metal GPU
