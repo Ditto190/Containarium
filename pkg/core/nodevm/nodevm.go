@@ -140,7 +140,15 @@ func RenderBootstrap(s Spec, tokenPath string) string {
 		b.WriteString("apt-get install -y -qq nvidia-driver-570-server || apt-get install -y -qq nvidia-utils-570-server || true\n")
 	}
 	b.WriteString("incus admin init --auto\n")
-	b.WriteString("# daemon + tunnel (same path scripts/setup-peer.sh installs)\n")
+	// KNOWN GAP (validated live 2026-06): this installs the daemon unit and
+	// launches the tunnel, but does NOT yet do the full daemon config+start
+	// that scripts/setup-peer.sh does — a jwt secret, the override.conf with
+	// --rest/--app-hosting/--network-subnet, `systemctl enable --now
+	// containarium`, and the tunnel's `--ports 22,8080`. Without those the
+	// node tunnels up but its REST /health is down, so the sentinel sees an
+	// unhealthy backend. Completing this (porting setup-peer.sh's daemon
+	// stanza) is the next step before a node-VM is a fully-healthy backend.
+	b.WriteString("# daemon + tunnel (see scripts/setup-peer.sh for the full daemon config this still needs)\n")
 	b.WriteString("/usr/local/bin/containarium service install\n")
 	fmt.Fprintf(&b, "export CONTAINARIUM_TUNNEL_TOKEN=\"$(cat %s)\"\n", tokenPath)
 	fmt.Fprintf(&b,

@@ -154,8 +154,22 @@ alone in its IOMMU group), by hand:
 - Bare-metal → LXC GPU passthrough works (`nvidia.runtime` + GPU device →
   `nvidia-smi` sees the card), so the GPU-node nested path is sound.
 
-Not yet exercised end-to-end: the in-VM daemon+tunnel registration (needs
-sentinel creds) and the VFIO GPU-to-VM bind (the reboot-class step).
+`containarium node provision --kind cpu` was then run **live** on that host
+(against a real sentinel, token delivered via a 0600 file): it created the
+VM, installed nested Incus, pushed the binary, and launched the tunnel —
+which dialed the sentinel under the right pool/spot-id, **with the token
+NOT on the tunnel's argv** (read from the 0600 file as designed). Three
+bugs were caught and fixed by that run: an invalid `incus list --vm` flag,
+a `waitAgent` loop missing its inter-probe sleep, and the gap below.
+
+**Known gap (next step):** the in-guest bootstrap launches the tunnel but
+does not yet fully configure+start the daemon (jwt secret, override flags,
+`systemctl enable --now`, tunnel `--ports`), so the node tunnels up but its
+REST `/health` is down and the sentinel sees it as unhealthy. Porting
+`scripts/setup-peer.sh`'s daemon stanza into `RenderBootstrap` is required
+before a node-VM is a fully-healthy backend.
+
+Not yet exercised: the VFIO GPU-to-VM bind (the reboot-class step).
 
 ## Related
 - `docs/MULTI-POOL.md`, `docs/MULTI-BACKEND-PEERS.md` — pool routing the nodes plug into.
