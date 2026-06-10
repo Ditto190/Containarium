@@ -590,6 +590,43 @@ func TestIsCloudServer(t *testing.T) {
 	}
 }
 
+func TestResolveAccessModel(t *testing.T) {
+	cases := []struct {
+		declared, srv string
+		want          credentials.AccessModel
+	}{
+		// The server's declaration wins — even against the host heuristic.
+		{"token", "https://self-hosted.example.com", credentials.AccessModelToken},
+		{"sshKey", defaultLoginServer, credentials.AccessModelSSHKey},
+		// No / unrecognized declaration → host heuristic (cloud=token, else sshKey).
+		{"", defaultLoginServer, credentials.AccessModelToken},
+		{"", "https://self-hosted.example.com", credentials.AccessModelSSHKey},
+		{"bogus", defaultLoginServer, credentials.AccessModelToken},
+		{"bogus", "https://self-hosted.example.com", credentials.AccessModelSSHKey},
+	}
+	for _, c := range cases {
+		if got := resolveAccessModel(c.declared, c.srv); got != c.want {
+			t.Errorf("resolveAccessModel(%q, %q) = %q, want %q", c.declared, c.srv, got, c.want)
+		}
+	}
+}
+
+func TestFetchSessionStatus_DecodesAccessModel(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"CLI_SESSION_STATUS_APPROVED","token":"t","accessModel":"token"}`))
+	}))
+	defer srv.Close()
+
+	st, err := fetchSessionStatus(context.Background(), srv.Client(), srv.URL+"/status")
+	if err != nil {
+		t.Fatalf("fetchSessionStatus: %v", err)
+	}
+	if st.AccessModel != "token" {
+		t.Errorf("AccessModel = %q, want \"token\"", st.AccessModel)
+	}
+}
+
 func TestShortDeviceSuffix_HexAndVaries(t *testing.T) {
 	seen := map[string]bool{}
 	for i := 0; i < 100; i++ {
