@@ -38,6 +38,9 @@ func newBoxBackend(_ *container.Manager) (box.BoxBackend, error) {
 		// Secret (in the gateway namespace) holding the matching private key.
 		GatewayUpstreamPublicKey: os.Getenv("CONTAINARIUM_K8S_GATEWAY_UPSTREAM_PUBLIC_KEY"),
 		GatewayUpstreamKeySecret: os.Getenv("CONTAINARIUM_K8S_GATEWAY_UPSTREAM_KEY_SECRET"),
+		// Escape hatch: keep the pre-pinning ignore_hostkey behavior. Default
+		// (unset) pins the box host key via known_hosts_data.
+		InsecureIgnoreHostKey: os.Getenv("CONTAINARIUM_K8S_INSECURE_IGNORE_HOST_KEY") == "1",
 	})
 }
 

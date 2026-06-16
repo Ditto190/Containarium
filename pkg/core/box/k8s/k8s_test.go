@@ -68,15 +68,30 @@ func TestCreateReconcilesObjects(t *testing.T) {
 		if pscPort := ss.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort; pscPort != 2222 {
 			t.Errorf("container port = %d, want 2222", pscPort)
 		}
-		// The authorized_keys Secret must be mounted where the image reads it,
-		// or the box has no keys and rejects every login (found in live test).
-		vm := ss.Spec.Template.Spec.Containers[0].VolumeMounts
-		if len(vm) != 1 || vm[0].MountPath != "/etc/agent-box" {
-			t.Errorf("authorized_keys not mounted at /etc/agent-box: %+v", vm)
+		// authorized_keys mounted where the image reads it (or the box rejects
+		// every login — found in live test), and the stable host key mounted
+		// (so the gateway can pin it).
+		mounts := map[string]string{} // mountPath set
+		for _, m := range ss.Spec.Template.Spec.Containers[0].VolumeMounts {
+			mounts[m.MountPath] = m.Name
 		}
-		vols := ss.Spec.Template.Spec.Volumes
-		if len(vols) != 1 || vols[0].Secret == nil || vols[0].Secret.SecretName != secretName("alice") {
-			t.Errorf("box volume not sourced from the authorized_keys Secret: %+v", vols)
+		if mounts["/etc/agent-box"] == "" {
+			t.Errorf("authorized_keys not mounted at /etc/agent-box: %+v", ss.Spec.Template.Spec.Containers[0].VolumeMounts)
+		}
+		if mounts["/etc/agent-box-hostkey"] == "" {
+			t.Errorf("host key not mounted at /etc/agent-box-hostkey")
+		}
+		vols := map[string]string{} // volume name -> secret name
+		for _, v := range ss.Spec.Template.Spec.Volumes {
+			if v.Secret != nil {
+				vols[v.Name] = v.Secret.SecretName
+			}
+		}
+		if vols[authorizedKeysVolume] != secretName("alice") {
+			t.Errorf("authorized-keys volume secret = %q", vols[authorizedKeysVolume])
+		}
+		if vols[hostKeyVolume] != hostKeySecretName("alice") {
+			t.Errorf("host-key volume secret = %q", vols[hostKeyVolume])
 		}
 	}
 	if _, err := cs.CoreV1().Services(ns).Get(ctx, serviceName, metav1.GetOptions{}); err != nil {

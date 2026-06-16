@@ -7,11 +7,49 @@ import (
 	"encoding/base64"
 	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
+
+// ensureHostKey returns the box's stable host public key (authorized-key form),
+// generating + storing a per-box host keypair Secret on first call. The private
+// half is mounted into the box (its entrypoint uses it as dropbear's host key);
+// the public half pins the box in the gateway Pipe's known_hosts_data. Stable
+// (not regenerated per pod restart) so the pin stays valid.
+func (b *Backend) ensureHostKey(ctx context.Context, tenant string) (pubs []string, err error) {
+	ns := b.namespaceFor(tenant)
+	name := hostKeySecretName(tenant)
+	if sec, gerr := b.clientset.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{}); gerr == nil {
+		return []string{string(sec.Data[hostKeyPubField]), string(sec.Data[hostKeyRSAPubField])}, nil
+	} else if !apierrors.IsNotFound(gerr) {
+		return nil, gerr
+	}
+	edPriv, edPub, err := generateEd25519HostKey()
+	if err != nil {
+		return nil, err
+	}
+	rsaPriv, rsaPub, err := generateRSAHostKey()
+	if err != nil {
+		return nil, err
+	}
+	sec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: boxLabels(tenant)},
+		Type:       corev1.SecretTypeOpaque,
+		Data: map[string][]byte{
+			hostKeyField:       edPriv,
+			hostKeyPubField:    []byte(edPub),
+			hostKeyRSAField:    rsaPriv,
+			hostKeyRSAPubField: []byte(rsaPub),
+		},
+	}
+	if _, err := b.clientset.CoreV1().Secrets(ns).Create(ctx, sec, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+		return nil, err
+	}
+	return []string{edPub, rsaPub}, nil
+}
 
 // pipeGVR is the sshpiper Kubernetes plugin's CRD. The design note
 // (docs/K8S-AGENT-BOX-RUNTIME-DESIGN.md) calls it "PiperUpstream"; the
@@ -41,7 +79,7 @@ func (b *Backend) upstreamHost(tenant string) string {
 // tenant's box pod: the incoming connection authenticates against the box's
 // authorized keys (inline, base64), and the upstream host key is trusted
 // (ignore_hostkey — TOFU/known_hosts pinning is a follow-up).
-func (b *Backend) pipeObject(tenant string, keys []string) *unstructured.Unstructured {
+func (b *Backend) pipeObject(tenant string, keys []string, hostPubKeys []string) *unstructured.Unstructured {
 	var buf []byte
 	for _, k := range keys {
 		buf = append(buf, []byte(k)...)
@@ -50,8 +88,15 @@ func (b *Backend) pipeObject(tenant string, keys []string) *unstructured.Unstruc
 	to := map[string]any{
 		"host":     b.upstreamHost(tenant),
 		"username": boxSSHUser, // fixed box login user; tenant identity is enforced by from.username
-		// ignore_hostkey for now (host-key pinning is a follow-up).
-		"ignore_hostkey": true,
+	}
+	// Host-key handling: pin the box's host keys (known_hosts_data) when we have
+	// them, else fall back to ignore_hostkey (the escape hatch / pre-pinning
+	// behavior). Both keys are pinned because sshpiper may negotiate either —
+	// stops a man-in-the-middle between sshpiper and the box.
+	if len(hostPubKeys) > 0 && !b.cfg.InsecureIgnoreHostKey {
+		to["known_hosts_data"] = knownHostsData(b.upstreamHost(tenant), hostPubKeys...)
+	} else {
+		to["ignore_hostkey"] = true
 	}
 	// The upstream credential: sshpiper authenticates to the box with this key
 	// (its public half is authorized on the box). Set only when configured.
@@ -83,8 +128,12 @@ func (b *Backend) upsertPipe(ctx context.Context, tenant string, keys []string) 
 		return nil
 	}
 	ns := b.cfg.GatewayNamespace
-	obj := b.pipeObject(tenant, keys)
-	_, err := b.dyn.Resource(pipeGVR).Namespace(ns).Create(ctx, obj, metav1.CreateOptions{})
+	hostPubs, err := b.ensureHostKey(ctx, tenant) // pin the box's stable host keys
+	if err != nil {
+		return fmt.Errorf("ensure host key: %w", err)
+	}
+	obj := b.pipeObject(tenant, keys, hostPubs)
+	_, err = b.dyn.Resource(pipeGVR).Namespace(ns).Create(ctx, obj, metav1.CreateOptions{})
 	if apierrors.IsAlreadyExists(err) {
 		existing, gerr := b.dyn.Resource(pipeGVR).Namespace(ns).Get(ctx, pipeName(tenant), metav1.GetOptions{})
 		if gerr != nil {
