@@ -403,6 +403,67 @@ handing it `kubectl` or a kube-apiserver token.*
 In one line: **the safest blast-radius for an autonomous agent in your cluster —
 SSH-native, RBAC-minimal, default-deny — with zero new control plane.**
 
+## Adoption plan (platform engineers / installs)
+
+Buy-in target: **platform / DevOps engineers**, success metric: **adoption
+(installs/stars)**. That collapses the whole campaign onto one thing —
+**time-to-wow on `kind`, then maximal discoverability.** Security depth and
+CNCF credibility are *supporting* assets, not the lead.
+
+### The governing number: time-to-wow
+
+Platform engineers evaluate with `helm install` and a timer. The funnel is:
+
+```
+find it → kind up → helm install → ssh agent@localhost -- agent-box → "oh, nice"
+```
+
+Under ~5 minutes and copy-pasteable → installs. Needs a real cluster, a cloud
+account, or hand-edited YAML → no installs. **Launch definition of done:**
+
+- `kind create cluster` → `helm repo add` → `helm install` → working agent box,
+  **zero manual YAML edits**.
+- Ships a NetworkPolicy-enforcing CNI **in the kind config** — a kind default
+  does not enforce NetworkPolicy, so the isolation demo would silently no-op.
+- The "wow" beat is built into the quickstart, not buried: right after the
+  agent does a task, three one-liners that *show* `no SA token` /
+  `egress dropped` / `shell refused`. Safety is demonstrated, not asserted, in
+  the same five minutes.
+
+### Discoverability (where platform engineers find tools), in priority order
+
+1. **Artifact Hub** — the Helm chart. The search surface for "is there a chart
+   for X." Non-negotiable for an installs metric.
+2. **README leads with the problem + a copy-paste install above the fold** — the
+   install command visible without scrolling; the one-line problem statement
+   directly above it.
+3. **`awesome-kubernetes` / `awesome-mcp` / `awesome-kubernetes-security`** list
+   PRs — the upstream-list traffic play, retargeted.
+4. **asciinema/GIF of the 5-min demo** embedded in the README — proof-of-wow
+   before they install.
+5. **CNCF Landscape** entry — low urgency for raw installs, cheap, lends
+   legitimacy that converts skeptics.
+
+### Sequencing
+
+1. **P0 — artifact:** Helm chart + `kind` quickstart hitting time-to-wow +
+   above-the-fold README. *Nothing ships until this is real.*
+2. **P0 — discoverability:** Artifact Hub + asciinema + awesome-list PRs, same
+   week as the chart.
+3. **P1 — trust backstop:** threat-model doc + Gateway API / NetworkPolicy / PSA
+   conformance, linked from the README.
+4. **P2 — compounding credibility:** problem-framed blog post, CNCF Landscape,
+   public dogfood.
+
+### The risk for an installs goal specifically
+
+SSH-transport weirdness causes bounce *before* the threat model is read — "SSH?
+in K8s?" → tab closed. For an adoption play the mitigation is **not a doc, it's
+the demo doing the convincing**: the `no SA token` / `egress dropped` beat must
+land in the same screen as the install, because for this audience
+seeing-is-believing beats prose. The threat model is a backstop you *link to*,
+not the front door.
+
 ## Integrating with an existing cluster (BYO)
 
 The primary target is **not** a dedicated cluster — it is a cluster the
