@@ -128,6 +128,9 @@ func (b *Backend) namespaceFor(tenant string) string {
 func (b *Backend) Create(ctx context.Context, spec box.BoxSpec) (*box.BoxStatus, error) {
 	ns := b.namespaceFor(spec.Ref.Tenant)
 	tenant := spec.Ref.Tenant
+	if spec.Image == "" {
+		spec.Image = b.cfg.BoxImage // default to the configured agent-box image
+	}
 
 	if _, err := b.clientset.CoreV1().Namespaces().Create(ctx, namespaceObject(ns, tenant), metav1.CreateOptions{}); ignoreExists(err) != nil {
 		return nil, fmt.Errorf("k8s: ensure namespace: %w", err)

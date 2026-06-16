@@ -99,6 +99,14 @@ AllowTcpForwarding  no                          # no pivoting out of the box
 `ForceCommand` is the load-bearing line: even a misbehaving client cannot get
 a shell — it gets `agent-box` and nothing else.
 
+**Shipped image (`images/agent-box/`):** the config above is the contract; the
+actual image realizes it with **dropbear** rather than OpenSSH — dropbear runs
+cleanly rootless and takes a forced command (`-c agent-box`), so the box runs
+**non-root on `:2222`** (an unprivileged port → no added capabilities) and the
+pod satisfies the `restricted` Pod Security profile. The agent still reaches the
+gateway on `:22`; `:2222` is only the internal sshpiper→pod hop. Built per
+release as `ghcr.io/footprintai/containarium-agent-box`.
+
 ### 2. Gateway (`sshpiper` Deployment + upstream controller)
 
 `sshpiper` itself is unchanged from the sentinel deployment — it terminates
@@ -112,7 +120,8 @@ The new piece is a thin **upstream controller** replacing the sentinel's
 - Programs the sshpiper upstream map via the maintained sshpiper **Kubernetes
   plugin** CRD — the `Pipe` resource (`sshpiper.com/v1beta1`, plural `pipes`;
   earlier drafts of this note called it "PiperUpstream"): `spec.from[].username
-  = <tenant>` → `spec.to.host = box-0.boxes.<tenant>.svc:22`, with the box's
+  = <tenant>` → `spec.to.host = box-0.boxes.<tenant>.svc:2222` (the box's
+  internal SSH port), upstream user `agent`, with the box's
   authorized keys inline as `authorized_keys_data`. The daemon manages Pipes via
   the dynamic client (no sshpiper Go types imported). CRD-driven removes the
   file-write race that bit the sentinel (the `#301`/`#404` class of bug).

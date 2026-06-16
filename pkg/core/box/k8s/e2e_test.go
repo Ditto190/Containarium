@@ -172,7 +172,7 @@ func TestE2E_GatewayPipe(t *testing.T) {
 		t.Fatalf("get pipe: %v", err)
 	}
 	host, _, _ := unstructured.NestedString(p.Object, "spec", "to", "host")
-	if host != "box-0.boxes.tenant-gw-e2e.svc.cluster.local:22" {
+	if host != "box-0.boxes.tenant-gw-e2e.svc.cluster.local:2222" {
 		t.Errorf("pipe to.host = %q", host)
 	}
 

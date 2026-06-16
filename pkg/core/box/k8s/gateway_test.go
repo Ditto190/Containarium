@@ -68,12 +68,12 @@ func TestCreateProgramsPipe(t *testing.T) {
 	}
 
 	host, _, _ := unstructured.NestedString(p.Object, "spec", "to", "host")
-	if host != "box-0.boxes.tenant-alice.svc.cluster.local:22" {
+	if host != "box-0.boxes.tenant-alice.svc.cluster.local:2222" {
 		t.Errorf("to.host = %q", host)
 	}
 	user, _, _ := unstructured.NestedString(p.Object, "spec", "to", "username")
-	if user != "alice" {
-		t.Errorf("to.username = %q, want alice", user)
+	if user != "agent" {
+		t.Errorf("to.username = %q, want agent", user)
 	}
 }
 
