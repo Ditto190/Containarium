@@ -196,7 +196,7 @@ type upgradeJob struct {
 
 // NewContainerServer creates a new container server
 func NewContainerServer() (*ContainerServer, error) {
-	mgr, err := container.New()
+	mgr, err := newManager()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create container manager: %w", err)
 	}

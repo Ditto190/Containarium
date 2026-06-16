@@ -15,3 +15,10 @@ import (
 func newBoxBackend(mgr *container.Manager) (box.BoxBackend, error) {
 	return boxlxc.New(mgr), nil
 }
+
+// newManager constructs the daemon's container.Manager. The default build
+// requires a reachable incus — a failure here is fatal, as it always has been.
+// The `k8s` build variant overrides this to tolerate a host without incus.
+func newManager() (*container.Manager, error) {
+	return container.New()
+}
