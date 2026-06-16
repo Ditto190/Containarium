@@ -59,6 +59,11 @@ type Config struct {
 	// authorize the agent keys directly (no-gateway / direct-SSH mode).
 	GatewayUpstreamPublicKey string
 	GatewayUpstreamKeySecret string
+
+	// InsecureIgnoreHostKey keeps the pre-pinning behavior (the Pipe sets
+	// ignore_hostkey instead of pinning the box's host key via known_hosts_data).
+	// Default false = pin. An escape hatch, not the recommended posture.
+	InsecureIgnoreHostKey bool
 }
 
 // Backend implements box.BoxBackend on Kubernetes.
@@ -155,6 +160,11 @@ func (b *Backend) Create(ctx context.Context, spec box.BoxSpec) (*box.BoxStatus,
 	}
 	if _, err := b.clientset.NetworkingV1().NetworkPolicies(ns).Create(ctx, networkPolicyObject(ns, tenant), metav1.CreateOptions{}); ignoreExists(err) != nil {
 		return nil, fmt.Errorf("k8s: ensure networkpolicy: %w", err)
+	}
+	// Stable per-box host key Secret — created before the StatefulSet, which
+	// mounts it (and dropbear uses it so the gateway can pin it).
+	if _, err := b.ensureHostKey(ctx, tenant); err != nil {
+		return nil, fmt.Errorf("k8s: ensure host key: %w", err)
 	}
 	if _, err := b.clientset.AppsV1().StatefulSets(ns).Create(ctx, statefulSetObject(ns, spec), metav1.CreateOptions{}); ignoreExists(err) != nil {
 		return nil, fmt.Errorf("k8s: ensure statefulset: %w", err)

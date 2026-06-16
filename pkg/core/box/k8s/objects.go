@@ -38,7 +38,17 @@ const (
 	// authorized_keys; the box's Secret is mounted here.
 	authorizedKeysMount  = "/etc/agent-box"
 	authorizedKeysVolume = "authorized-keys"
+
+	// Per-box stable host key (so the gateway can pin it). The entrypoint reads
+	// the private key here; the daemon stores it (+ the public half) in the
+	// host-key Secret.
+	hostKeyField    = "host_key"
+	hostKeyPubField = "host_key.pub"
+	hostKeyMount    = "/etc/agent-box-hostkey"
+	hostKeyVolume   = "host-key"
 )
+
+func hostKeySecretName(tenant string) string { return tenant + "-host-key" }
 
 func int32p(i int32) *int32 { return &i }
 func int64p(i int64) *int64 { return &i }
@@ -146,13 +156,13 @@ func statefulSetObject(ns string, spec box.BoxSpec) *appsv1.StatefulSet {
 			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
 			SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 		},
-		// Mount the box's authorized_keys Secret where the image reads it.
-		// Without this the box has no keys and rejects every login.
-		VolumeMounts: []corev1.VolumeMount{{
-			Name:      authorizedKeysVolume,
-			MountPath: authorizedKeysMount,
-			ReadOnly:  true,
-		}},
+		// Mount the box's authorized_keys (so it accepts logins) and its stable
+		// host key (so the gateway can pin it). Without the first the box
+		// rejects every login.
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: authorizedKeysVolume, MountPath: authorizedKeysMount, ReadOnly: true},
+			{Name: hostKeyVolume, MountPath: hostKeyMount, ReadOnly: true},
+		},
 	}
 	if res := resourceRequirements(spec.Resources); res != nil {
 		container.Resources = *res
@@ -174,12 +184,20 @@ func statefulSetObject(ns string, spec box.BoxSpec) *appsv1.StatefulSet {
 						SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 					},
 					Containers: []corev1.Container{container},
-					Volumes: []corev1.Volume{{
-						Name: authorizedKeysVolume,
-						VolumeSource: corev1.VolumeSource{
-							Secret: &corev1.SecretVolumeSource{SecretName: secretName(spec.Ref.Tenant)},
+					Volumes: []corev1.Volume{
+						{
+							Name: authorizedKeysVolume,
+							VolumeSource: corev1.VolumeSource{
+								Secret: &corev1.SecretVolumeSource{SecretName: secretName(spec.Ref.Tenant)},
+							},
 						},
-					}},
+						{
+							Name: hostKeyVolume,
+							VolumeSource: corev1.VolumeSource{
+								Secret: &corev1.SecretVolumeSource{SecretName: hostKeySecretName(spec.Ref.Tenant)},
+							},
+						},
+					},
 				},
 			},
 		},

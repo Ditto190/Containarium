@@ -5,6 +5,7 @@ package k8s
 import (
 	"context"
 	"encoding/base64"
+	"strings"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -74,6 +75,19 @@ func TestCreateProgramsPipe(t *testing.T) {
 	user, _, _ := unstructured.NestedString(p.Object, "spec", "to", "username")
 	if user != "agent" {
 		t.Errorf("to.username = %q, want agent", user)
+	}
+
+	// Host-key pinning: known_hosts_data set (exact format), ignore_hostkey gone.
+	if _, ignore, _ := unstructured.NestedBool(p.Object, "spec", "to", "ignore_hostkey"); ignore {
+		t.Error("Pipe should not set ignore_hostkey when pinning")
+	}
+	khd, _, _ := unstructured.NestedString(p.Object, "spec", "to", "known_hosts_data")
+	if khd == "" {
+		t.Fatal("Pipe should pin the box host key via known_hosts_data")
+	}
+	raw, _ := base64.StdEncoding.DecodeString(khd)
+	if !strings.HasPrefix(string(raw), "[box-0.boxes.tenant-alice.svc.cluster.local]:2222 ssh-ed25519 ") {
+		t.Errorf("known_hosts line wrong format: %q", raw)
 	}
 }
 

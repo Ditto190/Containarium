@@ -26,7 +26,16 @@ KEYDIR="$HOME/.dropbear"
 mkdir -p "$KEYDIR"
 ED_HOSTKEY="$KEYDIR/ed25519_host_key"
 RSA_HOSTKEY="$KEYDIR/rsa_host_key"
-[ -f "$ED_HOSTKEY" ] || dropbearkey -t ed25519 -f "$ED_HOSTKEY" >/dev/null 2>&1
+# Stable ed25519 host key: if the daemon mounted one (so the gateway can pin it
+# via known_hosts), convert that OpenSSH key to dropbear format; otherwise fall
+# back to an ephemeral key. Converting the same mounted key each start keeps the
+# host key stable across pod restarts.
+if [ -f /etc/agent-box-hostkey/host_key ]; then
+  dropbearconvert openssh dropbear /etc/agent-box-hostkey/host_key "$ED_HOSTKEY" >/dev/null 2>&1 \
+    || dropbearkey -t ed25519 -f "$ED_HOSTKEY" >/dev/null 2>&1
+elif [ ! -f "$ED_HOSTKEY" ]; then
+  dropbearkey -t ed25519 -f "$ED_HOSTKEY" >/dev/null 2>&1
+fi
 [ -f "$RSA_HOSTKEY" ] || dropbearkey -t rsa -s 3072 -f "$RSA_HOSTKEY" >/dev/null 2>&1
 
 # dropbear flags:

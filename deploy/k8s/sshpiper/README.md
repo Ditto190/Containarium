@@ -95,5 +95,8 @@ ssh -i <agent-private-key> <tenant>@"$GW"
 - The box authorizes only sshpiper's upstream key, never the agent's — the
   agent can never reach a box except through the gateway's per-tenant Pipe.
 - Pin the `farmer1992/sshpiperd` image to a release tag in production.
-- Host-key pinning (replacing the Pipe's `ignore_hostkey`) is a planned
-  follow-up.
+- **Host-key pinning is on by default**: the daemon gives each box a stable
+  host key (a per-box Secret mounted into the pod) and pins it in the Pipe's
+  `known_hosts_data`, so a man-in-the-middle between sshpiper and the box is
+  rejected. Set `CONTAINARIUM_K8S_INSECURE_IGNORE_HOST_KEY=1` to fall back to
+  `ignore_hostkey` (not recommended).
