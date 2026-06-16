@@ -61,8 +61,11 @@ func (b *Backend) pipeObject(tenant string, keys []string) *unstructured.Unstruc
 				"authorized_keys_data": base64.StdEncoding.EncodeToString(buf),
 			}},
 			"to": map[string]any{
-				"host":           b.upstreamHost(tenant),
-				"username":       tenant,
+				"host":     b.upstreamHost(tenant),
+				"username": boxSSHUser, // fixed box login user; tenant identity is enforced by from.username
+				// ignore_hostkey for now (host-key pinning is a follow-up). The
+				// upstream credential (spec.to.private_key_secret authorized on
+				// the box) is part of the end-to-end SSH data-plane follow-up.
 				"ignore_hostkey": true,
 			},
 		},

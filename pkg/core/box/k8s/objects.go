@@ -19,7 +19,14 @@ const (
 	statefulSetName = "box"
 	serviceName     = "boxes"
 	sshPortName     = "ssh"
-	sshPort         = 22
+	// sshPort is the box's in-pod SSH port. 2222 (unprivileged) so the box
+	// runs fully non-root with no added capabilities — the agent connects to
+	// the gateway on :22; this is the internal sshpiper→pod hop.
+	sshPort = 2222
+	// boxSSHUser is the fixed login user inside the box. The gateway connects
+	// upstream as this user (Pipe spec.to.username); tenant identity is
+	// enforced at the gateway, not by per-tenant box users.
+	boxSSHUser = "agent"
 
 	managedByLabel       = "app.kubernetes.io/managed-by"
 	managedByValue       = "containarium"
@@ -30,6 +37,8 @@ const (
 )
 
 func int32p(i int32) *int32 { return &i }
+func int64p(i int64) *int64 { return &i }
+func boolp(b bool) *bool    { return &b }
 
 // boxLabels are the identity labels shared by all of a tenant box's objects;
 // the pod selector and the cross-namespace List selector both key off them.
@@ -118,14 +127,20 @@ func statefulSetObject(ns string, spec box.BoxSpec) *appsv1.StatefulSet {
 		replicas = 1
 	}
 	labels := boxLabels(spec.Ref.Tenant)
-	falsePtr := false
 
+	// restricted-PSA container hardening: non-root, no privilege escalation,
+	// all capabilities dropped, default seccomp. The box image (dropbear on
+	// :2222) is built to run under exactly this.
 	container := corev1.Container{
 		Name:  "agent-box",
 		Image: spec.Image,
 		Ports: []corev1.ContainerPort{{Name: sshPortName, ContainerPort: sshPort, Protocol: corev1.ProtocolTCP}},
 		SecurityContext: &corev1.SecurityContext{
-			AllowPrivilegeEscalation: &falsePtr,
+			AllowPrivilegeEscalation: boolp(false),
+			RunAsNonRoot:             boolp(true),
+			RunAsUser:                int64p(1000),
+			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+			SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 		},
 	}
 	if res := resourceRequirements(spec.Resources); res != nil {
@@ -141,8 +156,13 @@ func statefulSetObject(ns string, spec box.BoxSpec) *appsv1.StatefulSet {
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{
-					AutomountServiceAccountToken: &falsePtr, // the box is a leaf, never a kube-apiserver client
-					Containers:                   []corev1.Container{container},
+					AutomountServiceAccountToken: boolp(false), // the box is a leaf, never a kube-apiserver client
+					SecurityContext: &corev1.PodSecurityContext{
+						RunAsNonRoot:   boolp(true),
+						RunAsUser:      int64p(1000),
+						SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+					},
+					Containers: []corev1.Container{container},
 				},
 			},
 		},

@@ -1,0 +1,49 @@
+name: agent-box image
+
+# Builds the Kubernetes agent-box image (images/agent-box/Dockerfile) to validate
+# both stages — the agent-box Go build and the rootless dropbear runtime. Build
+# only (no push); publishing to ghcr.io/footprintai/containarium-agent-box is
+# wired into the release flow separately.
+on:
+  pull_request:
+    paths:
+      - 'images/agent-box/**'
+      - 'cmd/agent-box/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/agent-box-image.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'images/agent-box/**'
+      - 'cmd/agent-box/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/agent-box-image.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build agent-box image
+        run: docker build -f images/agent-box/Dockerfile -t containarium-agent-box:ci .
+      - name: Smoke-check the image
+        # The binary and SSH server must be present and the entrypoint executable.
+        run: |
+          docker run --rm --entrypoint /bin/sh containarium-agent-box:ci -c '
+            set -e
+            test -x /usr/local/bin/agent-box
+            command -v dropbear
+            command -v dropbearkey
+            test -x /usr/local/bin/agent-box-entrypoint.sh
+            id -u | grep -qx 1000
+          '

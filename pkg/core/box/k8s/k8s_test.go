@@ -53,8 +53,21 @@ func TestCreateReconcilesObjects(t *testing.T) {
 	if _, err := cs.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{}); err != nil {
 		t.Errorf("namespace not created: %v", err)
 	}
-	if _, err := cs.AppsV1().StatefulSets(ns).Get(ctx, statefulSetName, metav1.GetOptions{}); err != nil {
+	ss, err := cs.AppsV1().StatefulSets(ns).Get(ctx, statefulSetName, metav1.GetOptions{})
+	if err != nil {
 		t.Errorf("statefulset not created: %v", err)
+	} else {
+		// restricted-PSA hardening the box image is built for.
+		sc := ss.Spec.Template.Spec.Containers[0].SecurityContext
+		if sc == nil || sc.RunAsNonRoot == nil || !*sc.RunAsNonRoot {
+			t.Errorf("container not runAsNonRoot: %+v", sc)
+		}
+		if sc != nil && (sc.Capabilities == nil || len(sc.Capabilities.Drop) != 1 || string(sc.Capabilities.Drop[0]) != "ALL") {
+			t.Errorf("container does not drop ALL caps: %+v", sc.Capabilities)
+		}
+		if pscPort := ss.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort; pscPort != 2222 {
+			t.Errorf("container port = %d, want 2222", pscPort)
+		}
 	}
 	if _, err := cs.CoreV1().Services(ns).Get(ctx, serviceName, metav1.GetOptions{}); err != nil {
 		t.Errorf("service not created: %v", err)
