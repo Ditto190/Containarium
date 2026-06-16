@@ -3,12 +3,14 @@
 package server
 
 import (
+	"log"
 	"os"
 	"strconv"
 
 	"github.com/footprintai/containarium/pkg/core/box"
 	boxk8s "github.com/footprintai/containarium/pkg/core/box/k8s"
 	"github.com/footprintai/containarium/pkg/core/container"
+	"github.com/footprintai/containarium/pkg/core/incus"
 )
 
 // newBoxBackend selects the box runtime for the `containarium-k8s` build
@@ -33,6 +35,21 @@ func newBoxBackend(_ *container.Manager) (box.BoxBackend, error) {
 		BoxImage:              os.Getenv("CONTAINARIUM_K8S_BOX_IMAGE"),
 		StorageClass:          os.Getenv("CONTAINARIUM_K8S_STORAGE_CLASS"),
 	})
+}
+
+// newManager constructs the daemon's container.Manager for the k8s variant.
+// A K8s node usually has no incus, so a failed connection is NOT fatal here:
+// the box-lifecycle surface is served by the Kubernetes backend, and the
+// residual incus-only Manager methods fall back to an UnavailableBackend that
+// returns clear errors instead of crashing. A host that happens to run both
+// (hybrid) still gets the real incus client.
+func newManager() (*container.Manager, error) {
+	mgr, err := container.New()
+	if err != nil {
+		log.Printf("[k8s] incus not reachable (%v); box lifecycle uses the Kubernetes backend — legacy incus-only RPCs will return errors", err)
+		return container.NewWithBackend(incus.NewUnavailableBackend()), nil
+	}
+	return mgr, nil
 }
 
 // k8sEnvOr returns the env var value or a default when unset. Defined here (in
