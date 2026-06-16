@@ -316,6 +316,11 @@ config files in `/etc`, run a database, and reboot — LXC is the right
 shape. If your agent runs a single Python process, Docker or Modal is
 fine.
 
+It isn't either/or: Containarium can also run a box *as a pod* in a
+Kubernetes cluster you already operate — same SSH-native agent contract,
+no kube-apiserver token in the agent's hands. See the **Kubernetes
+backend** below.
+
 ---
 
 ## What's in the box
@@ -347,6 +352,29 @@ A single sentinel can front:
 - **Windows VMs**: live alongside Linux backends.
 
 All containers from all backends appear in a single unified API.
+
+### Kubernetes backend (experimental)
+
+Beyond the LXC/incus backend, Containarium can run a box as a **pod in a
+Kubernetes cluster you already operate** — reached over SSH exactly like
+an LXC box, so an agent can't tell which substrate it landed on. The
+daemon reconciles a per-tenant namespace + StatefulSet + headless Service
++ default-deny NetworkPolicy, and programs the sshpiper gateway (the
+`Pipe` CRD) so `ssh <tenant>@<gateway>` routes to the right pod.
+
+The pitch isn't "another way to run pods" — it's giving an agent a
+hardened, SSH-native foothold in your cluster **without handing it a
+kube-apiserver token**: the box runs with `automountServiceAccountToken:
+false` and satisfies the `restricted` Pod Security profile.
+
+The backend is compiled behind a `k8s` build tag, so the default daemon
+never pulls in `client-go`. It is **experimental**: the control plane is
+implemented and CI-tested against [kind](https://kind.sigs.k8s.io/) on
+every change; the gateway data-plane (the agent-box image + end-to-end
+SSH through sshpiper) is still landing.
+
+Design, topology, and BYO-cluster integration:
+[docs/K8S-AGENT-BOX-RUNTIME-DESIGN.md](docs/K8S-AGENT-BOX-RUNTIME-DESIGN.md).
 
 ### Web UI
 
