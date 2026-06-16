@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-06-17
+
+An experimental **Kubernetes backend**: run an agent box as a pod in a cluster
+you already operate, reached over SSH exactly like an LXC box — same `agent-box`
+stdio MCP contract, no kube-apiserver token in the agent's hands. Gated behind
+the `k8s` build tag, so the default daemon is unchanged.
+
 ### Added
 
 - **Experimental Kubernetes backend (`//go:build k8s`).** Run an agent box as a
