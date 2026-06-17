@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.31.2] - 2026-06-17
+
+### Added
+
+- **REST transport for the cloud actuation client.** The host-side actuation
+  channel (`internal/cloud`) now speaks to a control plane that fronts its API
+  as REST/grpc-gateway only — like the managed cloud, where native gRPC over
+  :443 returns `403 text/html`. An `http(s)://` control-plane address selects
+  the REST transport, which speaks the same actuation RPCs over their gateway
+  mappings (`POST /v1/actuation/{heartbeat,status,enroll}`) and carries the host
+  bearer as the `Grpc-Metadata-Host-Bearer` header. Without this, a BYO-compute
+  host enrolled against a REST-only control plane could not heartbeat or report
+  its capability — so its capacity showed "unknown" in the operator view and the
+  host-sweeper treated it as stranded. `WatchAssignments` (server-streaming) is
+  gRPC-only; a BYOC host on a REST control plane is push-driven (the cloud drives
+  it via the sentinel peer-proxy), so REST mode runs heartbeat + status only and
+  skips the assignment-watch loop. (#722)
+
 ## [0.31.1] - 2026-06-17
 
 ### Added
