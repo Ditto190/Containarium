@@ -167,14 +167,14 @@ func (s *ContainerServer) RefreshSecrets(ctx context.Context, req *pb.RefreshSec
 		return nil, err
 	}
 
-	stamped, err := s.stampSecretsOnLXC(ctx, req.Username)
+	stamped, err := s.stampSecrets(ctx, req.Username)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "refresh secrets: %v", err)
 	}
 
 	log.Printf("[secrets] refresh %s: stamped=%d", req.Username, stamped)
 	return &pb.RefreshSecretsResponse{
-		Message: fmt.Sprintf("re-stamped %d secret(s) on %s-container; new execs will see updated values", stamped, req.Username),
+		Message: refreshSecretsMessage(s.boxes().Kind(), req.Username, stamped),
 		Stamped: safecast.I32(stamped),
 	}, nil
 }
