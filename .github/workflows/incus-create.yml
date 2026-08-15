@@ -189,6 +189,144 @@ jobs:
           sudo -E env "PATH=$PATH" go test -tags=incus -v -count=1 -timeout 40m \
             ./pkg/core/box/lxc/ ./pkg/core/incus/ ./internal/server/ -run 'TestIntegrationIncus' | tee incus-test.log
 
+      # #1368 — the daemon BINARY, with its flags.
+      #
+      # Everything above drives Go packages. That is why #1342
+      # (--zfs-keys-dir) had to be labelled needs-verification and shipped in
+      # v0.66.0 unverified: flag -> KeyProvider -> encrypted create only
+      # assembles on a running daemon, and nothing in CI assembled one.
+      #
+      # Reached over the REST surface with a JWT rather than gRPC+mTLS: the
+      # CLI looks for a client certificate bundle against a gRPC address even
+      # when the daemon has mTLS off, and generating a CA here would test the
+      # certificate tooling rather than the encrypted-create path.
+      #
+      # Asserted against the HOST's ZFS state, never the daemon's report of
+      # itself — a daemon claiming success is the thing under test.
+      - name: Create an encrypted container through the daemon and its flags
+        env:
+          JWT_SECRET: lane-only-secret-not-a-credential
+        run: |
+          set -euo pipefail
+          go build -o /tmp/containarium ./cmd/containarium
+          sudo mkdir -p /etc/containarium/keys
+
+          # --standalone skips the core LXCs (Postgres, Caddy). With no
+          # Postgres reachable the daemon waits ~2 minutes and proceeds with
+          # those services disabled; none are on the encrypted-create path.
+          sudo /tmp/containarium daemon --standalone --rest \
+            --jwt-secret "$JWT_SECRET" \
+            --zfs-keys-dir=/etc/containarium/keys \
+            > /tmp/daemon.log 2>&1 &
+
+          TOKEN=$(/tmp/containarium token generate --username admin --roles admin \
+                    --expiry 24h --secret "$JWT_SECRET" | tr -d " \t" | grep -E "^ey" | head -1)
+          test -n "$TOKEN" || { echo "::error::could not mint a token"; exit 1; }
+          export CONTAINARIUM_TOKEN="$TOKEN"
+          # CONTAINARIUM_HTTP is what actually selects the REST surface. An
+          # http:// address alone does not: the CLI dispatches on this flag,
+          # so without it every call goes down the gRPC path and asks for a
+          # client certificate bundle that does not exist here.
+          export CONTAINARIUM_HTTP=true
+          SERVER="http://localhost:8080"
+
+          # Readiness: the daemon answers a real RPC. Both the daemon's log
+          # and the CLIENT's error are printed on failure — the first attempt
+          # at this printed only the daemon's, which said it was serving,
+          # turning "the client cannot authenticate" into "the daemon is
+          # broken". Those lead to opposite investigations.
+          ready=""
+          for i in $(seq 1 60); do
+            if /tmp/containarium --server "$SERVER" list >/tmp/probe.log 2>&1; then
+              ready=yes; break
+            fi
+            sleep 5
+          done
+          if [ -z "$ready" ]; then
+            echo "::error::the daemon never answered the CLI"
+            echo "--- last CLI probe ---"; cat /tmp/probe.log || true
+            echo "--- daemon log tail ---"; tail -40 /tmp/daemon.log
+            exit 1
+          fi
+          grep -E "\[encryption\]" /tmp/daemon.log || true
+
+          TENANT="lane$$"
+          /tmp/containarium --server "$SERVER" create "$TENANT" \
+            --no-ssh-key --podman=false --disk 5GB --encrypted
+
+          # The claim, checked on the host: the instance sits under the
+          # TENANT's encryptionroot, not the pool default.
+          DS=$(sudo zfs list -H -o name -r | grep "/containers/${TENANT}-container$" | head -1)
+          test -n "$DS" || { echo "::error::no dataset for ${TENANT}-container"; sudo zfs list -r; exit 1; }
+          ROOT=$(sudo zfs get -H -o value encryptionroot "$DS")
+          echo "instance $DS has encryptionroot $ROOT"
+          case "$ROOT" in
+            */tenants/"$TENANT") ;;
+            *) echo "::error::encryptionroot is $ROOT — the container is not under its tenant's key"; exit 1 ;;
+          esac
+
+          # And a stopped container is ciphertext: the key unloads.
+          #
+          # `sleep` is the container-level stop; `stop` is `app stop`, for an
+          # app inside a box. Getting that wrong left the container running
+          # and the assertion below correctly reported the key as still
+          # loaded — a real-looking encryption failure caused by the wrong
+          # verb.
+          /tmp/containarium --server "$SERVER" sleep "$TENANT"
+          sleep 10
+          STATUS=$(sudo zfs get -H -o value keystatus "$ROOT")
+          echo "keystatus after stop: $STATUS"
+          test "$STATUS" = "unavailable" || {
+            echo "::error::the tenant key is still $STATUS after its last container stopped — a stopped container is NOT ciphertext at rest"; exit 1; }
+
+          /tmp/containarium --server "$SERVER" delete "$TENANT" --force || true
+          sudo pkill -f "containarium daemon" || true
+          sleep 3
+
+      # The closed default is the promise every OSS daemon ships with, so it
+      # gets an assertion rather than trust: without the flag, the same create
+      # must be refused, and refused for the documented reason.
+      - name: Without --zfs-keys-dir the same create is refused
+        env:
+          JWT_SECRET: lane-only-secret-not-a-credential
+        run: |
+          set -euo pipefail
+          sudo /tmp/containarium daemon --standalone --rest \
+            --jwt-secret "$JWT_SECRET" > /tmp/daemon-nokeys.log 2>&1 &
+
+          TOKEN=$(/tmp/containarium token generate --username admin --roles admin \
+                    --expiry 24h --secret "$JWT_SECRET" | tr -d " \t" | grep -E "^ey" | head -1)
+          export CONTAINARIUM_TOKEN="$TOKEN"
+          # CONTAINARIUM_HTTP is what actually selects the REST surface. An
+          # http:// address alone does not: the CLI dispatches on this flag,
+          # so without it every call goes down the gRPC path and asks for a
+          # client certificate bundle that does not exist here.
+          export CONTAINARIUM_HTTP=true
+          SERVER="http://localhost:8080"
+
+          ready=""
+          for i in $(seq 1 60); do
+            if /tmp/containarium --server "$SERVER" list >/tmp/probe2.log 2>&1; then
+              ready=yes; break
+            fi
+            sleep 5
+          done
+          if [ -z "$ready" ]; then
+            echo "::error::the daemon never answered the CLI"
+            echo "--- last CLI probe ---"; cat /tmp/probe2.log || true
+            tail -40 /tmp/daemon-nokeys.log; exit 1
+          fi
+
+          if /tmp/containarium --server "$SERVER" create "nokeys$$" \
+               --no-ssh-key --podman=false --disk 5GB --encrypted > /tmp/refusal.log 2>&1; then
+            echo "::error::an encrypted create SUCCEEDED on a daemon with no key custody — the closed default regressed"
+            exit 1
+          fi
+          grep -qi "keyprovider" /tmp/refusal.log || {
+            echo "::error::refused, but not for the documented reason:"; cat /tmp/refusal.log; exit 1; }
+          echo "closed default holds: $(head -3 /tmp/refusal.log)"
+          sudo pkill -f "containarium daemon" || true
+
       # A skip here means the environment check above passed and the test
       # decided otherwise — a contradiction worth failing on rather than
       # quietly reporting green (#1234).
