@@ -34,6 +34,19 @@ type stateHost struct {
 	capacityErr     error
 	// isolations records the class each node was created with (#1429).
 	isolations map[string]clustercore.Isolation
+	// deleteErr makes every Delete fail, so a test can drive the
+	// retry path without racing anything.
+	deleteErr error
+	// onObserve fires after ClusterVMs has read the host, so a test
+	// can land a scale-down between the observation and the decision
+	// that consumes it (#1498 review).
+	onObserve func()
+	// onDelete fires inside Delete, before the instance is removed.
+	// It exists so a test can drive a reconciler pass into the middle
+	// of a DeleteNodes batch — the interleaving that recreated a
+	// drained node in production (#1498) and cannot be reproduced by
+	// calling the two in sequence.
+	onDelete func(name string)
 }
 
 type stateVM struct {
@@ -106,11 +119,27 @@ func (h *stateHost) Stop(name string) error {
 
 func (h *stateHost) Delete(name string) error {
 	h.mu.Lock()
-	defer h.mu.Unlock()
+	if h.deleteErr != nil {
+		err := h.deleteErr
+		h.mu.Unlock()
+		return err
+	}
 	if _, ok := h.vms[name]; !ok {
+		h.mu.Unlock()
 		return fmt.Errorf("no vm %s", name)
 	}
 	delete(h.vms, name)
+	hook := h.onDelete
+	h.mu.Unlock()
+
+	// Fired with the instance already gone and the caller not yet
+	// returned — the production window, where a reconciler tick sees
+	// a group short of a target that has not been lowered yet
+	// (#1498). Outside the lock, because the hook re-enters this fake
+	// through the reconciler exactly as a real tick would.
+	if hook != nil {
+		hook(name)
+	}
 	return nil
 }
 
@@ -172,7 +201,10 @@ func (h *stateHost) Exec(name string, cmd []string) (string, error) {
 			return fmt.Sprintf("MemTotal:%15d kB\n", (bytes-6_144)/1024), nil
 		}
 	}
-	if len(cmd) >= 2 && cmd[1] == "kubectl" {
+	// Only `kubectl get nodes` lists nodes. Answering the node list to
+	// every kubectl subcommand would make a `delete secret` look like
+	// a success no matter what it was handed.
+	if len(cmd) >= 3 && cmd[1] == "kubectl" && cmd[2] == "get" {
 		var b strings.Builder
 		for vm := range h.vms {
 			fmt.Fprintf(&b, "%s   Ready   <none>   1m   v-test\n", vm)
@@ -183,6 +215,16 @@ func (h *stateHost) Exec(name string, cmd []string) (string, error) {
 }
 
 func (h *stateHost) ClusterVMs(tenant, clusterName string) (clustercore.Observed, error) {
+	// Fired BEFORE the host is read, so the observation this call
+	// returns already reflects the hook's work while the caller's
+	// Desired does not — the stale-target window (#1498 review).
+	h.mu.Lock()
+	hook := h.onObserve
+	h.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	obs := clustercore.Observed{Workers: map[string][]clustercore.ObservedVM{}}
