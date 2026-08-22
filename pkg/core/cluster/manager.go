@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -113,6 +114,28 @@ func (m *Manager) DeleteVM(name string) error {
 	return m.host.Delete(name)
 }
 
+// abandon removes an instance whose provisioning failed after it was
+// created, and returns the original error.
+//
+// Decide() re-emits ActionCreateCP / ActionCreateWorker only when an
+// instance is MISSING, so anything left behind here is never retried
+// and never replaced: the cluster stays in error with a running
+// instance consuming its full size, and on the worker path the store
+// never learns about it either — invisible to `cluster status` and to
+// the autoscaler, exactly the shape of #1498's leaked node.
+//
+// The removal is best-effort by design: the provisioning failure is
+// what the caller needs to see, and a delete that also fails only adds
+// a second symptom of the same broken host. It is logged so the orphan
+// is not silent.
+func (m *Manager) abandon(name string, cause error) error {
+	if err := m.DeleteVM(name); err != nil {
+		log.Printf("[cluster] %s failed to provision (%v) and could not be removed (%v); "+
+			"it will not be retried while the instance exists", name, cause, err)
+	}
+	return cause
+}
+
 const bootstrapScriptPath = "/root/containarium-bootstrap.sh"
 
 // pushFile writes a file into a node, creating its parent directory
@@ -131,33 +154,79 @@ func (m *Manager) pushFile(name, path string, content []byte, mode string) error
 	return m.host.Push(name, path, content, mode)
 }
 
-// containerKubeletArgs assembles the kubelet flags a container-class
-// node needs.
+// observedNodeCapacity asks a BOOTED node what it observes as its own
+// capacity, by reading the two files cadvisor derives node capacity
+// from inside the node itself.
 //
-// Today that is only the user-namespace gate (#1452): kubelet writes
-// kernel sysctls an unprivileged container may not touch, and without
-// the gate ContainerManager never starts.
-//
-// It deliberately does NOT reserve resources. #1452 wired a
-// reservation computed as (daemon host capacity - requested size), on
-// Amendment 1's premise that a container node always reports the
-// host's capacity. That premise holds only on a NESTED host, where
-// lxcfs masking does not reach the inner instances. On a plain host
-// running Incus directly the node sees its real limit, and the
-// reservation becomes larger than the node's whole capacity -- kubelet
-// rejects it ("capacity >= reservation") and refuses to start, so the
-// correction meant to make allocatable truthful prevented the node
-// from running at all (#1456).
-//
-// ReservedResources and HostCapacity remain: they are correct as
-// functions. What was wrong was applying them unconditionally, from
-// the wrong vantage point. #1456 covers deciding from the node itself
-// whether a correction is needed.
-func (m *Manager) containerKubeletArgs(iso Isolation, _ NodeSpec) []string {
-	if iso != IsolationContainer {
-		return nil
+// This vantage point is the whole correction of #1466. The daemon
+// host's /proc cannot answer the question: on a plain Incus host
+// lxcfs masks these files and the node sees its real limits, while on
+// a nested host masking does not reach the inner instance and the node
+// sees the outer host. The two are indistinguishable from outside, and
+// guessing wrong in either direction has already shipped a bug —
+// #1456 (reservation applied where none was needed; kubelet refused to
+// start) and #1466 (no reservation where one was needed; autoscaling
+// silently disabled).
+func (m *Manager) observedNodeCapacity(name string) (int, int64, error) {
+	cpuinfo, err := m.host.Exec(name, []string{"cat", ProcCPUInfoPath})
+	if err != nil {
+		return 0, 0, fmt.Errorf("read %s on %s: %w", ProcCPUInfoPath, name, err)
 	}
-	return ContainerKubeletArgs(nil)
+	meminfo, err := m.host.Exec(name, []string{"cat", ProcMemInfoPath})
+	if err != nil {
+		return 0, 0, fmt.Errorf("read %s on %s: %w", ProcMemInfoPath, name, err)
+	}
+	return ParseProcCapacity(cpuinfo, meminfo)
+}
+
+// containerKubeletArgs assembles the kubelet flags a container-class
+// node needs, given what that node — already booted — reports about
+// itself.
+//
+// Two flags, for two different failures:
+//
+//   - The user-namespace gate (#1452), always. kubelet writes kernel
+//     sysctls an unprivileged container may not touch, and without the
+//     gate ContainerManager never starts.
+//   - A reservation, ONLY when the node actually misreports (#1466).
+//     Allocatable = capacity - reserved, and both the scheduler and
+//     cluster-autoscaler's fit simulation read allocatable; a node
+//     advertising the outer host's 8 cpu instead of its own 2 gets
+//     packed with pods it cannot run and never triggers the scale-up
+//     that should have happened.
+//
+// The trigger is what took three attempts to get right. #1452 computed
+// the reservation from (daemon host capacity - requested size) and
+// applied it unconditionally, on the premise that a container node
+// always reports the host's capacity. That premise holds only on a
+// NESTED host. On a plain host the node sees its real limit, the
+// reservation exceeded the node's entire capacity, and kubelet refused
+// to start ("capacity >= reservation") — so the correction meant to
+// make allocatable truthful stopped the node running at all (#1456,
+// removed in #1457). Asking the node is the only thing that
+// distinguishes the two, so that is what this does.
+//
+// A zero reservation renders no flags: where the node already observes
+// its own size the stock kubelet is correct.
+func (m *Manager) containerKubeletArgs(iso Isolation, spec NodeSpec) ([]string, error) {
+	if iso != IsolationContainer {
+		return nil, nil
+	}
+	cpu, mem, err := m.observedNodeCapacity(spec.Name)
+	if err != nil {
+		// Fail closed. An unmeasurable node is not a node that
+		// observes itself correctly — proceeding without a
+		// reservation is precisely the silent failure #1466 exists to
+		// end, and it would leave no trace anywhere.
+		return nil, fmt.Errorf(
+			"cannot establish %s's observed capacity, so its allocatable cannot be made truthful: %w",
+			spec.Name, err)
+	}
+	reserved, err := NodeReservation(cpu, mem, spec)
+	if err != nil {
+		return nil, fmt.Errorf("node %s: %w", spec.Name, err)
+	}
+	return ContainerKubeletArgs(KubeletReservedArgs(reserved)), nil
 }
 
 // ProvisionCP creates and bootstraps the control-plane VM: create →
@@ -175,25 +244,29 @@ func (m *Manager) ProvisionCP(tenant, clusterName string, iso Isolation, cpSize 
 	}
 	ip, err := m.host.WaitReady(name, m.waitReadyTimeout)
 	if err != nil {
-		return "", fmt.Errorf("control-plane VM %s not ready: %w", name, err)
+		return "", m.abandon(name, fmt.Errorf("control-plane VM %s not ready: %w", name, err))
 	}
 	bin, err := m.k3sBinary()
 	if err != nil {
-		return "", err
+		return "", m.abandon(name, err)
 	}
 	if err := m.pushFile(name, K3sBinaryPath, bin, "0755"); err != nil {
-		return "", fmt.Errorf("push k3s binary: %w", err)
+		return "", m.abandon(name, fmt.Errorf("push k3s binary: %w", err))
+	}
+	kubeletArgs, err := m.containerKubeletArgs(iso, spec)
+	if err != nil {
+		return "", m.abandon(name, fmt.Errorf("control-plane kubelet args: %w", err))
 	}
 	script := RenderServerScript(ServerBootstrap{
 		TLSSANs:     append([]string{ip}, tlsSANs...),
 		Isolation:   iso,
-		KubeletArgs: m.containerKubeletArgs(iso, spec),
+		KubeletArgs: kubeletArgs,
 	})
 	if err := m.pushFile(name, bootstrapScriptPath, []byte(script), "0755"); err != nil {
-		return "", fmt.Errorf("push bootstrap script: %w", err)
+		return "", m.abandon(name, fmt.Errorf("push bootstrap script: %w", err))
 	}
 	if _, err := m.host.Exec(name, []string{"sh", bootstrapScriptPath}); err != nil {
-		return "", fmt.Errorf("control-plane bootstrap: %w", err)
+		return "", m.abandon(name, fmt.Errorf("control-plane bootstrap: %w", err))
 	}
 	return ip, nil
 }
@@ -226,17 +299,17 @@ func (m *Manager) ProvisionWorker(tenant, clusterName string, iso Isolation, g D
 		return fmt.Errorf("create worker node: %w", err)
 	}
 	if _, err := m.host.WaitReady(vmName, m.waitReadyTimeout); err != nil {
-		return fmt.Errorf("worker VM %s not ready: %w", vmName, err)
+		return m.abandon(vmName, fmt.Errorf("worker VM %s not ready: %w", vmName, err))
 	}
 	bin, err := m.k3sBinary()
 	if err != nil {
 		return err
 	}
 	if err := m.pushFile(vmName, K3sBinaryPath, bin, "0755"); err != nil {
-		return fmt.Errorf("push k3s binary: %w", err)
+		return m.abandon(vmName, fmt.Errorf("push k3s binary: %w", err))
 	}
 	if err := m.pushFile(vmName, AgentTokenPath, token, "0600"); err != nil {
-		return fmt.Errorf("push join token: %w", err)
+		return m.abandon(vmName, fmt.Errorf("push join token: %w", err))
 	}
 	// A container-class worker cannot derive its own containerd
 	// template: k3s agent writes config.toml only after retrieving
@@ -247,26 +320,30 @@ func (m *Manager) ProvisionWorker(tenant, clusterName string, iso Isolation, g D
 	if iso == IsolationContainer {
 		generated, err := m.host.Read(cp, ContainerdGeneratedConfigPath)
 		if err != nil {
-			return fmt.Errorf("read containerd config from %s: %w", cp, err)
+			return m.abandon(vmName, fmt.Errorf("read containerd config from %s: %w", cp, err))
 		}
 		tmpl, err := DeriveContainerdTemplate(generated)
 		if err != nil {
-			return fmt.Errorf("derive containerd template: %w", err)
+			return m.abandon(vmName, fmt.Errorf("derive containerd template: %w", err))
 		}
 		if err := m.pushFile(vmName, ContainerdConfigTemplatePath, tmpl, "0644"); err != nil {
-			return fmt.Errorf("push containerd template: %w", err)
+			return m.abandon(vmName, fmt.Errorf("push containerd template: %w", err))
 		}
+	}
+	kubeletArgs, err := m.containerKubeletArgs(iso, spec)
+	if err != nil {
+		return m.abandon(vmName, fmt.Errorf("worker kubelet args: %w", err))
 	}
 	script := RenderAgentScript(AgentBootstrap{
 		ServerURL:   "https://" + cpIP + ":6443",
 		Isolation:   iso,
-		KubeletArgs: m.containerKubeletArgs(iso, spec),
+		KubeletArgs: kubeletArgs,
 	})
 	if err := m.pushFile(vmName, bootstrapScriptPath, []byte(script), "0755"); err != nil {
-		return fmt.Errorf("push bootstrap script: %w", err)
+		return m.abandon(vmName, fmt.Errorf("push bootstrap script: %w", err))
 	}
 	if _, err := m.host.Exec(vmName, []string{"sh", bootstrapScriptPath}); err != nil {
-		return fmt.Errorf("worker bootstrap: %w", err)
+		return m.abandon(vmName, fmt.Errorf("worker bootstrap: %w", err))
 	}
 	return nil
 }
