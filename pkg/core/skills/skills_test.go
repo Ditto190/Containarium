@@ -133,6 +133,48 @@ func TestEmbeddedCatalogLoads(t *testing.T) {
 	if cr.Model != "" {
 		t.Errorf("code-review should not pin a model (provider-agnostic), got %q", cr.Model)
 	}
+
+	// deploy-branch provisions a fresh box from a git ref and must declare
+	// the write scopes it needs to create the box, SSH into it, and expose a
+	// route — not just read access.
+	deploy, err := m.Get("deploy-branch")
+	if err != nil {
+		t.Fatalf("deploy-branch skill missing: %v", err)
+	}
+	if deploy.GetRecipeId() != "agent-runtime" {
+		t.Errorf("deploy-branch recipe_id = %q, want agent-runtime", deploy.GetRecipeId())
+	}
+	if deploy.SystemPrompt == "" {
+		t.Error("deploy-branch has empty system_prompt")
+	}
+	requireScope := func(scopes []string, want string) {
+		t.Helper()
+		for _, s := range scopes {
+			if s == want {
+				return
+			}
+		}
+		t.Errorf("deploy-branch missing expected scope %q, got %v", want, scopes)
+	}
+	requireScope(deploy.AllowedScopes, "containers:write")
+	requireScope(deploy.AllowedScopes, "ssh:write")
+	requireScope(deploy.AllowedScopes, "routes:write")
+
+	// verify-endpoint drives a live URL with a browser, so it declares its
+	// own browser-capable box rather than the plain agent-runtime one.
+	verify, err := m.Get("verify-endpoint")
+	if err != nil {
+		t.Fatalf("verify-endpoint skill missing: %v", err)
+	}
+	if verify.GetRecipeId() != "agent-runtime-browser" {
+		t.Errorf("verify-endpoint recipe_id = %q, want agent-runtime-browser", verify.GetRecipeId())
+	}
+	if verify.SystemPrompt == "" {
+		t.Error("verify-endpoint has empty system_prompt")
+	}
+	if len(verify.AllowedScopes) == 0 {
+		t.Error("verify-endpoint declares no allowed_scopes")
+	}
 }
 
 func TestValidateRejectsBadManifests(t *testing.T) {
