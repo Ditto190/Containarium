@@ -135,8 +135,7 @@ func TestEmbeddedCatalogLoads(t *testing.T) {
 	}
 
 	// deploy-branch provisions a fresh box from a git ref and must declare
-	// the write scopes it needs to create the box, SSH into it, and expose a
-	// route — not just read access.
+	// the write scopes it needs to create the box and SSH into it.
 	deploy, err := m.Get("deploy-branch")
 	if err != nil {
 		t.Fatalf("deploy-branch skill missing: %v", err)
@@ -147,18 +146,34 @@ func TestEmbeddedCatalogLoads(t *testing.T) {
 	if deploy.SystemPrompt == "" {
 		t.Error("deploy-branch has empty system_prompt")
 	}
-	requireScope := func(scopes []string, want string) {
-		t.Helper()
+	hasScope := func(scopes []string, want string) bool {
 		for _, s := range scopes {
 			if s == want {
-				return
+				return true
 			}
 		}
-		t.Errorf("deploy-branch missing expected scope %q, got %v", want, scopes)
+		return false
+	}
+	requireScope := func(scopes []string, want string) {
+		t.Helper()
+		if !hasScope(scopes, want) {
+			t.Errorf("deploy-branch missing expected scope %q, got %v", want, scopes)
+		}
 	}
 	requireScope(deploy.AllowedScopes, "containers:write")
 	requireScope(deploy.AllowedScopes, "ssh:write")
-	requireScope(deploy.AllowedScopes, "routes:write")
+	// deploy-branch deliberately does NOT request routes:write: AddRoute
+	// requires RoleAdmin unconditionally (see
+	// TestAddRoute_RejectsScopeOnlyToken, internal/server), and a skill
+	// token is minted with scopes only, never a role — so routes:write on a
+	// skill manifest would be a scope that can never actually be exercised.
+	// Locking this in as a regression guard: if this starts failing because
+	// someone re-added routes:write, the authorization gap needs to be
+	// fixed first (see the skill's comment in skills.yaml), not just this
+	// assertion deleted.
+	if hasScope(deploy.AllowedScopes, "routes:write") {
+		t.Error("deploy-branch requests routes:write, but AddRoute requires RoleAdmin unconditionally and skill tokens are never granted roles — this scope can never be exercised (see skills.yaml comment)")
+	}
 
 	// verify-endpoint drives a live URL with a browser, so it declares its
 	// own browser-capable box rather than the plain agent-runtime one.

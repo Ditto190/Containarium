@@ -97,10 +97,23 @@ skills:
   # deploy-branch is a generic provisioning skill: stand up a live, reachable
   # instance of a git ref. It has no knowledge of what's calling it or why —
   # verification, demos, and preview environments are all just "deploy this
-  # ref and give me a URL" to this skill.
+  # ref and give me a reachable address" to this skill.
+  #
+  # Deliberately does NOT expose a public route: AddRoute (network_server.go)
+  # requires RoleAdmin unconditionally, and every skill token is minted with
+  # scopes only, zero roles (agent_server.go RunAgentSkill) — a skill can
+  # never hold RoleAdmin, so calling AddRoute would always fail closed. There
+  # is no existing precedent for a scope-only bypass on a route WRITE path
+  # (RequireRoleOrScope elsewhere in this codebase is documented and used for
+  # READ paths only). Rather than weaken that admin gate for a generic skill,
+  # this skill returns the box's private IP (via GetContainer, which — like
+  # CreateContainer — is scope-gated only, no role requirement) instead of a
+  # public URL. Callers that need public reachability (e.g. an end-user demo
+  # link) are responsible for their own route, via a caller with the
+  # appropriate role — not this skill.
   - id: deploy-branch
     name: Deploy Branch
-    description: Provisions a new box from a git repo/ref, builds and starts the app inside it, exposes it publicly, and returns the live URL (or a typed failure).
+    description: Provisions a new box from a git repo/ref, builds and starts the app inside it, and returns its reachable private address (or a typed failure). Does not expose a public route — see recipe comment.
     recipe_id: agent-runtime
     system_prompt: >-
       You deploy a git branch as a live, reachable web app. The task input is
@@ -112,28 +125,29 @@ skills:
       --git-ref=ref so the daemon clones the ref into the box's workspace at
       create time; (2) once the box is ready, run build_command (if
       non-empty) then start_command inside the box as a background process,
-      logging stdout/stderr to a file you can inspect on failure; (3) poll
-      health_check_path on the box's exposed port until it responds or a
-      reasonable timeout elapses; (4) expose the port publicly and get its
-      URL; (5) return ONLY a JSON artifact: on success {"status": "deployed",
-      "url": "<public URL>", "container_name": "<name>"}; on failure
-      {"status": "failed", "reason": "deploy_error|timeout|build_failed",
-      "detail": "<what happened, include relevant log output>"}. Never
-      fabricate success — if you cannot confirm the health check passed,
-      report failure with the real reason. Clean up (delete the box) on
-      failure so failed attempts don't leak resources; leave it running on
-      success — the caller owns its lifecycle from there.
+      logging stdout/stderr to a file you can inspect on failure; (3) look up
+      the box's private IP address (GetContainer); (4) poll
+      health_check_path on http://<private_ip>:<port> until it responds or a
+      reasonable timeout elapses; (5) return ONLY a JSON artifact: on success
+      {"status": "deployed", "url": "http://<private_ip>:<port>",
+      "container_name": "<name>"}; on failure {"status": "failed", "reason":
+      "deploy_error|timeout|build_failed", "detail": "<what happened,
+      include relevant log output>"}. Never fabricate success — if you
+      cannot confirm the health check passed, report failure with the real
+      reason. The returned url is reachable on the box's private network,
+      not the public internet — this skill provisions and starts the app,
+      it does not expose it publicly. Clean up (delete the box) on failure
+      so failed attempts don't leak resources; leave it running on success —
+      the caller owns its lifecycle from there.
     allowed_scopes:
       - containers:read
       - containers:write
       - ssh:write
-      - routes:read
-      - routes:write
     allowed_peers: []
     agent_card:
       id: deploy-branch
       name: Deploy Branch
-      description: Deploys a git branch to a live box and returns its public URL.
+      description: Deploys a git branch to a live box and returns its private network address.
       capabilities:
         - deploy
         - provisioning
