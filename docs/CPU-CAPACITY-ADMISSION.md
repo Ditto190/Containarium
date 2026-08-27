@@ -16,7 +16,7 @@ advisory mode, logged) if it would push the host's committed cores past
 **This section is about the LXC/Incus backend specifically** — the runtime
 this gate applies to (see "Runtime" under "Semantics and scope" below; on
 K8s the gate no-ops entirely, and the analogous concept is the backend's own
-`--cpu-request`/`limits.requests.cpu` split, a separate mechanism, not this
+`--cpu-request`/`resources.requests.cpu` split, a separate mechanism, not this
 gate).
 
 On LXC/Incus, a box's `--cpu` (or `resize --cpu`) always bounds a *ceiling* —
@@ -108,6 +108,13 @@ the network-policy engine was rolled out — observe first:
   actually creates the box. A pool/peer-routed create is forwarded to the target
   peer's own daemon, which runs *its* gate against *its* host — so no
   cross-host capacity view is needed, and each host enforces its own ceiling.
+- **Daemon-only — local CLI mode never runs it.** `containarium create`/
+  `resize` invoked without `--server` talks to Incus directly
+  (`internal/cmd/create.go`'s `createLocal`, `resize.go`'s
+  `runResizeLocal`) and never reaches the daemon's gRPC handlers this gate
+  lives in. A local-mode create/resize is not subject to this gate at all,
+  regardless of how it's configured — only requests that actually go
+  through a daemon (`--server ...`) are gated.
 - **What counts as committed.** The sum of every tenant container's committed
   cores (`CommittedCores` over its `limits.cpu` / `limits.cpu.allowance`). Two
   exclusions: **core-infra** containers (platform Postgres/Caddy — not tenant

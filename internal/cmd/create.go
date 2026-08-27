@@ -87,13 +87,18 @@ Examples:
   # Force recreate if container already exists
   containarium create alice --ssh-key ~/.ssh/id_rsa.pub --force
 
-Note on --cpu (LXC backend): it sets a ceiling this box may not exceed, not
-automatically a guaranteed floor. On a host without the CPU admission gate
-enabled and enforced (the default), a declared --cpu can go unmet under
-contention from other boxes — see docs/CPU-CAPACITY-ADMISSION.md for when
-it becomes a real guarantee and how to configure it. On the K8s backend,
+Note on --cpu (LXC backend, --server/daemon mode): it sets a ceiling this
+box may not exceed, not automatically a guaranteed floor. On a host without
+the CPU admission gate enabled and enforced (the default), a declared --cpu
+can go unmet under contention from other boxes — see
+docs/CPU-CAPACITY-ADMISSION.md for when it becomes a real guarantee and how
+to configure it. Local mode (no --server) talks to Incus directly and never
+goes through the daemon, so this gate does not apply there regardless of
+configuration. On the K8s backend,
 --cpu-request (a separate flag, mirrored on resize) is the mechanism for a
-guaranteed reservation instead.`,
+scheduling reservation instead — Kubernetes uses it for placement and
+relative CPU weighting under contention, not as a hard runtime floor
+(--cpu / resources.limits.cpu remains the runtime ceiling either way).`,
 	Args: cobra.ExactArgs(1),
 	RunE: runCreate,
 }
@@ -142,7 +147,7 @@ func init() {
 	// with --no-ssh-key. Enforce "exactly one of the two" in runCreate (cobra's
 	// MarkFlagRequired can't express the either/or).
 	createCmd.MarkFlagsMutuallyExclusive("ssh-key", "no-ssh-key")
-	createCmd.Flags().StringVar(&cpuLimit, "cpu", "4", "CPU limit (number of cores). LXC backend: a ceiling, not automatically a floor — see docs/CPU-CAPACITY-ADMISSION.md for when it's actually guaranteed. K8s backend: pair with --cpu-request for a guaranteed reservation.")
+	createCmd.Flags().StringVar(&cpuLimit, "cpu", "4", "CPU limit (number of cores). LXC backend: a ceiling, not automatically a floor — see docs/CPU-CAPACITY-ADMISSION.md for when it's actually guaranteed. K8s backend: pair with --cpu-request for a scheduling reservation (not a runtime floor).")
 	createCmd.Flags().StringVar(&memoryLimit, "memory", "4GB", "Memory limit (e.g., 4GB, 2048MB)")
 	createCmd.Flags().StringVar(&diskLimit, "disk", "50GB", "Disk limit (e.g., 50GB, 100GB)")
 	createCmd.Flags().StringVar(&staticIP, "static-ip", "", "Static IP address (e.g., 10.100.0.100) - empty for DHCP")
