@@ -36,7 +36,7 @@ func (s *ContainerServer) SetSecret(ctx context.Context, req *pb.SetSecretReques
 	if req.Username == "" {
 		return nil, status.Error(codes.InvalidArgument, "username is required")
 	}
-	if err := auth.AuthorizeTenant(ctx, req.Username); err != nil {
+	if err := auth.AuthorizeSecretTenant(ctx, req.Username, auth.ScopeSecretsWrite); err != nil {
 		return nil, err
 	}
 
@@ -77,7 +77,7 @@ func (s *ContainerServer) GetSecret(ctx context.Context, req *pb.GetSecretReques
 	if req.Username == "" {
 		return nil, status.Error(codes.InvalidArgument, "username is required")
 	}
-	if err := auth.AuthorizeTenant(ctx, req.Username); err != nil {
+	if err := auth.AuthorizeSecretTenant(ctx, req.Username, auth.ScopeSecretsRead); err != nil {
 		return nil, err
 	}
 
@@ -105,7 +105,7 @@ func (s *ContainerServer) ListSecrets(ctx context.Context, req *pb.ListSecretsRe
 	if req.Username == "" {
 		return nil, status.Error(codes.InvalidArgument, "username is required")
 	}
-	if err := auth.AuthorizeTenant(ctx, req.Username); err != nil {
+	if err := auth.AuthorizeSecretTenant(ctx, req.Username, auth.ScopeSecretsRead); err != nil {
 		return nil, err
 	}
 
@@ -135,7 +135,7 @@ func (s *ContainerServer) DeleteSecret(ctx context.Context, req *pb.DeleteSecret
 	if req.Username == "" {
 		return nil, status.Error(codes.InvalidArgument, "username is required")
 	}
-	if err := auth.AuthorizeTenant(ctx, req.Username); err != nil {
+	if err := auth.AuthorizeSecretTenant(ctx, req.Username, auth.ScopeSecretsWrite); err != nil {
 		return nil, err
 	}
 
@@ -163,7 +163,7 @@ func (s *ContainerServer) RefreshSecrets(ctx context.Context, req *pb.RefreshSec
 	if req.Username == "" {
 		return nil, status.Error(codes.InvalidArgument, "username is required")
 	}
-	if err := auth.AuthorizeTenant(ctx, req.Username); err != nil {
+	if err := auth.AuthorizeSecretTenant(ctx, req.Username, auth.ScopeSecretsWrite); err != nil {
 		return nil, err
 	}
 

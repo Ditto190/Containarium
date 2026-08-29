@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Cross-tenant secret access now requires an explicitly granted scope.**
+  Reading or writing *another* tenant's secrets needs the admin role **and**
+  `secrets:read` / `secrets:write` stated on the token. The admin role alone no
+  longer implies it.
+
+  Two reasonable behaviors composed into an unintended one. `HasScope` treats an
+  absent scopes claim as unrestricted — `token generate` without `--scopes` is
+  documented that way — so the scope check could not deny such a token anything.
+  And `AuthorizeTenant` short-circuits on the admin role, so the requested
+  username was never compared against the caller. Together, a token minted
+  `--roles admin` with no `--scopes` — the ordinary shape for an orchestrator,
+  CI runner, or automation account — could call `GetSecret` for **any** tenant
+  and receive the decrypted value. Envelope encryption does not help there: the
+  daemon decrypts on demand for the caller.
+
+  **Same-tenant access is unchanged**, including from unscoped tokens. That path
+  is not the problem and is what every ordinary `containarium secrets` call
+  uses, so narrowing it would break working deployments to no security end.
+
+  **If you have automation that manages other tenants' secrets**, re-mint its
+  token with `--scopes secrets:read` (or `secrets:write`, or both) alongside
+  whatever else it needs. The denial names the missing scope and the flag.
+  Automation that does *not* need cross-tenant secret access — most of it —
+  should be left without the scope, which is the point.
+
+  `HasScope`'s nil semantics are deliberately unchanged: flipping those globally
+  would revoke every existing unscoped token across every RPC at once, a far
+  larger blast radius than the one being closed.
+
 ## [0.67.0] - 2026-08-21
 
 ### Added
