@@ -36,6 +36,12 @@ type Config struct {
 	// path (a hold-back window over the assistant text; #670 layer 2). Streaming
 	// token metering is independent and always on. Fail-open regardless.
 	OutputFilter bool
+
+	// Revocations is the kill-switch for issued gateway tokens (see
+	// revocation.go). Nil disables the check, which is the pre-existing
+	// behavior — a standalone daemon with no Postgres has no revocation store
+	// to consult. Production wires the same store used for platform JWTs.
+	Revocations RevocationChecker
 }
 
 // Gateway brokers every agent box's model calls: it authenticates the box's
@@ -142,6 +148,15 @@ func (g *Gateway) handleModel(w http.ResponseWriter, r *http.Request) {
 	}
 	if claims.Provider != provName {
 		http.Error(w, "token not valid for provider "+provName, http.StatusForbidden)
+		return
+	}
+
+	// Kill-switch. Deliberately ahead of the key lookup and the Director, so a
+	// revoked token never causes the real provider key to be touched.
+	if g.isRevoked(r.Context(), claims.ID) {
+		g.cfg.Logger.Printf("model-gateway: REVOKED tenant=%s skill=%s provider=%s jti=%s",
+			claims.Tenant, claims.SkillID, provName, claims.ID)
+		http.Error(w, "gateway token revoked", http.StatusUnauthorized)
 		return
 	}
 

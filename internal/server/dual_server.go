@@ -1690,11 +1690,29 @@ skipAppHosting:
 			} else {
 				gwSink = sink
 			}
+			// Kill-switch for issued gateway tokens: the SAME jti revocation
+			// store already wired for platform JWTs. It is issuer-agnostic
+			// (keyed on jti alone), so `containarium token revoke --jti <id>`
+			// kills a gateway token too — no new verb, RPC, or schema.
+			//
+			// Assigned through a nil check rather than directly: a nil
+			// *auth.PgRevocationStore placed in an interface field yields a
+			// NON-nil interface holding a nil pointer, so the `Revocations ==
+			// nil` guard in the gateway would not fire and every model call
+			// would dereference nil. A daemon without Postgres reaches here
+			// with a nil store, so this is the common path, not a corner case.
+			var gwRevocations modelgateway.RevocationChecker
+			if revocationStoreLocal != nil {
+				gwRevocations = revocationStoreLocal
+			} else {
+				log.Printf("Warning: model-gateway has no revocation store (no Postgres) — issued gateway tokens cannot be killed before they expire")
+			}
 			gw := modelgateway.New(modelgateway.Config{
 				Secret:       []byte(config.JWTSecret),
 				Providers:    modelgateway.DefaultProviders(),
 				ProviderKeys: keys,
 				Sink:         gwSink,
+				Revocations:  gwRevocations,
 				// Redact system-prompt (skill persona) leakage on the streaming
 				// chat path (#670 layer 2). Default on; set
 				// CONTAINARIUM_GATEWAY_OUTPUT_FILTER=0 to disable. Streaming token
