@@ -2,9 +2,13 @@ package server
 
 import (
 	"fmt"
+	"log"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
+	appconfig "github.com/footprintai/containarium/internal/config"
 	"github.com/footprintai/containarium/internal/modelgateway"
 )
 
@@ -146,4 +150,72 @@ func gatewayPrimaryProvider(keys map[string]string) string {
 // (file absent). `set -a` exports everything the file sets.
 func sourceGatewayEnvPrefix(seedDir string) string {
 	return fmt.Sprintf("set -a; [ -f %s/gateway.env ] && . %s/gateway.env; set +a; ", seedDir, seedDir)
+}
+
+// gatewayPolicyFromEnv builds the gateway's enforcement config from the daemon
+// env, or returns nil when the operator has configured nothing — in which case
+// the gateway meters and denies nothing, exactly as it did before enforcement
+// existed. Opt-in by construction: an operator upgrading the daemon must not
+// discover that their agents are being throttled by numbers they never chose.
+//
+// Pure apart from the env reads, so the parsing is testable on its own.
+func gatewayPolicyFromEnv() *modelgateway.PolicyConfig {
+	var pc modelgateway.PolicyConfig
+
+	pc.Quota.Window = envDuration(appconfig.EnvGatewayQuotaWindow, 0)
+	pc.Quota.MaxCalls = envInt64(appconfig.EnvGatewayQuotaCalls)
+	pc.Quota.MaxTotalTokens = envInt64(appconfig.EnvGatewayQuotaTokens)
+	pc.Quota.MaxOutputTokens = envInt64(appconfig.EnvGatewayQuotaOutputTokens)
+	pc.Anomaly.Enabled = os.Getenv(appconfig.EnvGatewayAnomalyEnabled) == "1"
+	pc.RevokeAt = envFloat(appconfig.EnvGatewayAnomalyRevokeAt)
+
+	// A window alone is not a configuration: it says when to measure, not how
+	// much is allowed. Without a cap or the detectors, there is nothing to
+	// enforce and the policy stays absent.
+	if pc.Quota.IsZero() && !pc.Anomaly.Enabled {
+		return nil
+	}
+	return &pc
+}
+
+// gatewayPolicyLogSink writes ladder transitions to the daemon log. The gateway
+// keeps its own alerting dependency-free, so this is the daemon's minimum
+// wiring: a state change that nobody is told about is not a response.
+type gatewayPolicyLogSink struct{}
+
+func (gatewayPolicyLogSink) PolicyTransition(ev modelgateway.PolicyEvent) {
+	names := make([]string, 0, len(ev.Signals))
+	for _, s := range ev.Signals {
+		names = append(names, s.Name)
+	}
+	log.Printf("model-gateway: tenant=%s skill=%s %s -> %s reason=%q score=%.2f quota=%.0f%% signals=%v",
+		ev.Tenant, ev.Skill, ev.From, ev.To, ev.Reason, ev.Score, ev.Quota*100, names)
+}
+
+func envInt64(key string) int64 {
+	v, err := strconv.ParseInt(strings.TrimSpace(os.Getenv(key)), 10, 64)
+	if err != nil || v < 0 {
+		return 0
+	}
+	return v
+}
+
+func envFloat(key string) float64 {
+	v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv(key)), 64)
+	if err != nil || v < 0 {
+		return 0
+	}
+	return v
+}
+
+func envDuration(key string, def time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return def
+	}
+	return d
 }

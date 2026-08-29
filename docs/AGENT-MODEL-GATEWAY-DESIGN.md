@@ -199,11 +199,77 @@ Cloud owns the *rating* (named tiers, per-model cents) — consistent with the
 - **Phase 1 — metering.** Parse `usage`, write per-tenant rollups, add
   `containarium agent usage`.
 - **Phase 2 — tiering + rate limits.** `allowed_models` on the skill manifest;
-  enforce ceiling + per-tenant token bucket at the gateway.
+  enforce ceiling + per-tenant token bucket at the gateway. *Shipped: the
+  model ceiling rides the gateway token, and per-tenant quota + the response
+  ladder are below.*
 - **Phase 3 — caching + OpenAI.** Shared prompt-cache breakpoint management;
   add the `codex`/OpenAI path (`OPENAI_BASE_URL`).
 - **Phase 4 — egress tighten.** Drop provider domains from
   `defaultAgentEgressDomains`; agent boxes egress to the gateway only.
+
+## Enforcement: quota + the graduated response ladder
+
+Metering answers "what did this tenant spend"; it does not stop a runaway. The
+gateway is the only place a limit can actually be enforced, because a limit
+applied inside the box is advice the box can ignore — it holds the credential.
+`internal/modelgateway/{quota,anomaly,policy}.go` add that, off by default.
+
+**Quota** (`QuotaLimits`) caps calls, total tokens, and output tokens per tenant
+over a rolling window. The window is a ring of buckets, so a budget is a rolling
+budget and not a lifetime cap: a tenant that overspent an hour ago works again
+without an operator. Cached tokens count — replaying a huge cached prefix is
+exactly the runaway a budget exists to stop.
+
+**Signals** (`AnomalyConfig`) are per-tenant and relative, never absolute. An
+absolute threshold is either high enough for a stolen token to live under or low
+enough to fire on a normal Monday. The detectors:
+
+| signal | fires when |
+| --- | --- |
+| `rate_baseline` | token rate exceeds this tenant's own learned baseline by a factor |
+| `model_switch` | a model the tenant has not used within the novelty TTL |
+| `endpoint_mix` | an upstream path the tenant has not used |
+| `concurrent_source_nets` | one tenant's token in use from more networks than a box population explains |
+| `auth_failure_ratio` | a large share of the tenant's recent calls are rejected — a token being probed |
+
+Two properties are load-bearing and easy to regress. The baseline learns only
+from windows that were quiet *and* evaluated first, or the spike being judged
+raises the bar it is judged against. And the novelty signals stay silent until a
+tenant is learned, because a new tenant's first model and first endpoint are
+novel by construction — emitting them escalates every new tenant on its first
+call, and an escalated tenant stops feeding its baseline, so it would never
+become learned.
+
+**The ladder** (`PolicyState`) is observe → throttle → alert → circuit-break →
+revoke. Escalation is immediate; descent is damped by a cooldown and goes one
+rung at a time. Every rung except the last is reversible with no human, which is
+what lets the detector be wrong: being wrong costs latency, not an outage. A
+circuit-break is time-boxed and steps down on its own — unless the condition is
+still live, in which case it extends rather than flapping. Revocation is sticky,
+needs an operator to clear, and is never reached automatically unless
+`RevokeAt` is explicitly configured.
+
+The check runs after the gateway token is verified and before the reverse
+proxy's Director, so a denied call never has the real key injected and never
+reaches the provider. `Policy.Revoke` takes effect on the next call with no
+token re-issue and no box restart — an already-issued 30-minute token stops
+working immediately.
+
+Operator surface: `GET /__gateway/policy` reports every tenant's rung, what put
+it there, and consumption against budget. Configuration is env, and a daemon
+that sets none of it meters exactly as before:
+
+| var | meaning |
+| --- | --- |
+| `CONTAINARIUM_GATEWAY_QUOTA_WINDOW` | rolling window (Go duration, default `1m`) |
+| `CONTAINARIUM_GATEWAY_QUOTA_CALLS` | calls per tenant per window |
+| `CONTAINARIUM_GATEWAY_QUOTA_TOKENS` | input+output+cached tokens per tenant per window |
+| `CONTAINARIUM_GATEWAY_QUOTA_OUTPUT_TOKENS` | generated tokens per tenant per window |
+| `CONTAINARIUM_GATEWAY_ANOMALY` | `1` enables the detectors |
+| `CONTAINARIUM_GATEWAY_ANOMALY_REVOKE_AT` | score (0..1] for automatic revocation; unset = never |
+
+A window alone is not a configuration — it says when to measure, not how much is
+allowed — so it does not switch enforcement on by itself.
 
 ## Open questions
 
