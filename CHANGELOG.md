@@ -27,9 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   store is issuer-agnostic, so `containarium token revoke --jti <id>` kills a
   gateway token with no new verb, RPC, or schema.
 
-  The lookup **fails open**, matching the platform JWT path: by that point the
-  signature, issuer, expiry, tenant binding and model ceiling have all been
-  checked, so a database outage degrades to the protection that existed before
+  The lookup **fails open**, matching the platform JWT path. The token's
+  signature, issuer, expiry and provider binding are already checked when it
+  runs, and the allowed-model ceiling is applied further down the same request,
+  so a database outage degrades to exactly the protection that existed before
   this check rather than taking every tenant's model traffic down with the
   database. A daemon with no Postgres has no store to consult and logs a warning
   at startup saying its gateway tokens cannot be killed early.

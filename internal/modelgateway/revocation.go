@@ -40,10 +40,14 @@ const revocationLookupTimeout = 500 * time.Millisecond
 //
 // Fails OPEN — on a lookup error the call is allowed, with a warning. That
 // matches the platform JWT path and is the right trade for a kill-switch
-// rather than a primary gate: the token's signature, issuer, expiry, tenant
-// binding, and model ceiling have all already been checked by this point, so a
-// database outage degrades us to the protection we had before this check
-// existed instead of taking every tenant's model traffic down with the
+// rather than a primary gate.
+//
+// What survives a fail-open, precisely: the token's signature, issuer, expiry
+// and provider binding are already checked when this runs, and the
+// allowed-model ceiling is applied further down the same request — failing
+// open resumes handleModel, it does not skip to the proxy. So a database
+// outage degrades us to exactly the protection we had before this check
+// existed, instead of taking every tenant's model traffic down with the
 // database.
 //
 // An empty jti short-circuits without a lookup: tokens minted before jti
