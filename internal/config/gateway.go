@@ -15,9 +15,9 @@ const (
 	// EnvGatewayQuotaCalls caps model calls per tenant per window.
 	EnvGatewayQuotaCalls = "CONTAINARIUM_GATEWAY_QUOTA_CALLS"
 	// EnvGatewayQuotaTokens caps input+output+cached tokens per tenant per window.
-	EnvGatewayQuotaTokens = "CONTAINARIUM_GATEWAY_QUOTA_TOKENS"
+	EnvGatewayQuotaTokens = "CONTAINARIUM_GATEWAY_QUOTA_TOKENS" // #nosec G101 -- env var name, not a credential value
 	// EnvGatewayQuotaOutputTokens caps generated tokens per tenant per window.
-	EnvGatewayQuotaOutputTokens = "CONTAINARIUM_GATEWAY_QUOTA_OUTPUT_TOKENS"
+	EnvGatewayQuotaOutputTokens = "CONTAINARIUM_GATEWAY_QUOTA_OUTPUT_TOKENS" // #nosec G101 -- env var name, not a credential value
 
 	// EnvGatewayAnomalyEnabled turns the per-tenant anomaly detectors on ("1").
 	// Off by default: the detectors are advisory input to the response ladder,

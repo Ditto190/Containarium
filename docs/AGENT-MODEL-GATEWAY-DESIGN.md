@@ -199,9 +199,10 @@ Cloud owns the *rating* (named tiers, per-model cents) — consistent with the
 - **Phase 1 — metering.** Parse `usage`, write per-tenant rollups, add
   `containarium agent usage`.
 - **Phase 2 — tiering + rate limits.** `allowed_models` on the skill manifest;
-  enforce ceiling + per-tenant token bucket at the gateway. *Shipped: the
+  enforce ceiling + a per-tenant rolling quota at the gateway. *Shipped: the
   model ceiling rides the gateway token, and per-tenant quota + the response
-  ladder are below.*
+  ladder are below. Rolling window rather than a token bucket — there is no
+  burst allowance or refill rate, just "how much in the last N minutes".*
 - **Phase 3 — caching + OpenAI.** Shared prompt-cache breakpoint management;
   add the `codex`/OpenAI path (`OPENAI_BASE_URL`).
 - **Phase 4 — egress tighten.** Drop provider domains from

@@ -31,7 +31,18 @@ type counts struct {
 	inputTokens  int64
 	outputTokens int64
 	cachedTokens int64
-	denials      int64
+
+	// authDenials are requests rejected because the token did not authorize
+	// them — wrong provider, model outside the allowed set. These are evidence
+	// about the CALLER, which is why the auth-failure-ratio signal reads them.
+	authDenials int64
+
+	// policyDenials are requests the ladder itself refused. Deliberately a
+	// separate counter: folding them into authDenials would make enforcement
+	// self-amplifying — throttling a tenant would raise its own failure ratio,
+	// which raises its anomaly score, which escalates it further, until a
+	// budget overrun had been laundered into "this token is being probed".
+	policyDenials int64
 }
 
 func (c *counts) add(o counts) {
@@ -39,7 +50,8 @@ func (c *counts) add(o counts) {
 	c.inputTokens += o.inputTokens
 	c.outputTokens += o.outputTokens
 	c.cachedTokens += o.cachedTokens
-	c.denials += o.denials
+	c.authDenials += o.authDenials
+	c.policyDenials += o.policyDenials
 }
 
 // totalTokens is what a token budget is spent against. Cached tokens are
@@ -143,10 +155,27 @@ func (w *rollingWindow) rate(now time.Time) float64 {
 	return float64(out.totalTokens()) / elapsed
 }
 
+// maxRecentValues caps how many distinct values one tenant's set retains.
+//
+// This is a hard bound, not a tuning knob. Two of the three sets are keyed on
+// caller-controlled input — the upstream path and the request's model id come
+// straight off the wire — so an unbounded map would let one box grow a tenant's
+// state without limit for the whole novelty TTL (24h by default), and make the
+// per-observation prune scan cost grow with it. 64 is far above what a real box
+// exercises (a handful of endpoints, a handful of models) and low enough that
+// the linear scans below are trivial.
+const maxRecentValues = 64
+
 // recentSet tracks which distinct categorical values a tenant has used lately —
 // model ids, upstream paths, source networks. Values expire by last-seen rather
 // than by bucket, because the question these answer is "is this one new?", not
 // "how many times?".
+//
+// Bounded at maxRecentValues: past the cap the least-recently-seen value is
+// evicted. An evicted value reads as novel if it returns, which is the honest
+// answer — it is no longer among the tenant's recent behavior. A caller
+// flooding distinct values evicts its own history and keeps tripping the
+// novelty signal, which is the correct outcome rather than a bypass.
 type recentSet struct {
 	ttl  time.Duration
 	seen map[string]time.Time
@@ -165,7 +194,28 @@ func (s *recentSet) observe(now time.Time, v string) bool {
 	s.prune(now)
 	last, ok := s.seen[v]
 	s.seen[v] = now
+	if !ok && len(s.seen) > maxRecentValues {
+		s.evictOldest()
+	}
 	return !ok || now.Sub(last) > s.ttl
+}
+
+// evictOldest drops the least-recently-seen entry. Linear, but bounded by
+// maxRecentValues and only reached when the set is full.
+func (s *recentSet) evictOldest() {
+	var (
+		oldestKey string
+		oldestAt  time.Time
+		first     = true
+	)
+	for k, t := range s.seen {
+		if first || t.Before(oldestAt) {
+			oldestKey, oldestAt, first = k, t, false
+		}
+	}
+	if !first {
+		delete(s.seen, oldestKey)
+	}
 }
 
 // len is the number of distinct live values.

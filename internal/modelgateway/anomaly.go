@@ -192,13 +192,17 @@ func (a AnomalyConfig) evaluate(ts *tenantState, now time.Time) []Signal {
 	}
 
 	// Rejected-request ratio: a token being probed rather than used.
+	//
+	// Reads authDenials only. Policy denials are excluded on purpose: counting
+	// the ladder's own refusals here would make a throttled tenant look like a
+	// probed one and escalate it further on the strength of our own enforcement.
 	w := ts.rateWindow.sum(now)
-	if total := w.calls + w.denials; total >= a.AuthFailureMin {
-		if ratio := float64(w.denials) / float64(total); ratio >= a.AuthFailureRatio {
+	if total := w.calls + w.authDenials; total >= a.AuthFailureMin {
+		if ratio := float64(w.authDenials) / float64(total); ratio >= a.AuthFailureRatio {
 			out = append(out, Signal{
 				Name:     SignalAuthFailureRate,
 				Severity: clamp01(ratio),
-				Detail:   fmt.Sprintf("%d/%d recent requests rejected (%.0f%%)", w.denials, total, ratio*100),
+				Detail:   fmt.Sprintf("%d/%d recent requests rejected (%.0f%%)", w.authDenials, total, ratio*100),
 			})
 		}
 	}

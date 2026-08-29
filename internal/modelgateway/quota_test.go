@@ -79,11 +79,12 @@ func TestQuotaLimits_CachedTokensCountTowardTotal(t *testing.T) {
 	}
 }
 
-// Denials are counted for the auth-failure ratio but are not spend — they never
-// reached a provider, so they must not consume the tenant's budget.
+// Denials of either kind are not spend — they never reached a provider, so they
+// must not consume the tenant's budget. A throttled tenant whose refusals ate
+// its own quota could never climb back out.
 func TestQuotaLimits_DenialsAreNotSpend(t *testing.T) {
 	q := QuotaLimits{Window: time.Minute, MaxCalls: 5, MaxTotalTokens: 100}
-	if u := q.evaluate(counts{denials: 50}); u.exceeded != "" || u.fraction != 0 {
+	if u := q.evaluate(counts{authDenials: 50, policyDenials: 50}); u.exceeded != "" || u.fraction != 0 {
 		t.Errorf("denials consumed budget: exceeded=%q fraction=%v", u.exceeded, u.fraction)
 	}
 }

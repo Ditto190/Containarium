@@ -575,3 +575,96 @@ func statusFor(t *testing.T, p *Policy, tenant string) TenantStatus {
 	t.Fatalf("no status for tenant %q", tenant)
 	return TenantStatus{}
 }
+
+// Automatic revocation must be as sticky as the manual kind. Gating stickiness
+// on a manual reason left an auto-revoked tenant walking back down the ladder
+// one rung per cooldown, so a token cut off for a high anomaly score regained
+// access by going quiet for five minutes.
+func TestPolicy_AutoRevokeIsStickyToo(t *testing.T) {
+	clk := newFakeClock()
+	p := NewPolicy(PolicyConfig{
+		Anomaly: AnomalyConfig{
+			Enabled: true, NoveltyTTL: time.Hour,
+			ConcurrentSourceNets: 1, ConcurrentWindow: time.Minute,
+			BaselineMinSamples: 1000,
+		},
+		AlertAt: 0.01, BreakAt: 0.02, RevokeAt: 0.05,
+		Cooldown: time.Minute,
+		Now:      clk.now,
+	})
+
+	var d Decision
+	for _, addr := range []string{"10.0.0.1:1", "203.0.113.1:1", "198.51.100.1:1", "192.0.2.1:1"} {
+		i := req("acme")
+		i.RemoteAddr = addr
+		d = p.Check(i)
+	}
+	if d.State != StateRevoke {
+		t.Fatalf("state = %s, want revoke", d.State)
+	}
+
+	// Long quiet stretches from a single clean network must not lift it.
+	for i := 0; i < 10; i++ {
+		clk.advance(10 * time.Minute)
+		d = p.Check(req("acme"))
+		if d.Allow || d.State != StateRevoke {
+			t.Fatalf("auto-revocation lifted itself after %d quiet cycles: %+v", i+1, d)
+		}
+	}
+
+	p.Clear("acme")
+	if d := p.Check(req("acme")); !d.Allow {
+		t.Errorf("Clear did not restore an auto-revoked tenant: %+v", d)
+	}
+}
+
+// The ladder's own refusals must not feed the auth-failure signal. Counting
+// them made enforcement self-amplifying: throttling a tenant raised its failure
+// ratio, which raised its score, which escalated it further — laundering a
+// budget overrun into "this token is being probed".
+func TestPolicy_PolicyDenialsDoNotFeedTheAuthFailureSignal(t *testing.T) {
+	clk := newFakeClock()
+	p := NewPolicy(PolicyConfig{
+		Quota: QuotaLimits{Window: time.Minute, MaxTotalTokens: 100},
+		Anomaly: AnomalyConfig{
+			Enabled:            true,
+			AuthFailureRatio:   0.5,
+			AuthFailureMin:     4,
+			BaselineMinSamples: 1000,
+			NoveltyTTL:         time.Hour,
+		},
+		ThrottleMinInterval: time.Hour, // every call past the first is refused
+		CircuitBreakFor:     time.Hour,
+		Now:                 clk.now,
+	})
+
+	// Blow the budget, then keep calling: each call is refused by the ladder.
+	p.RecordUsage("acme", Usage{InputTokens: 500})
+	var d Decision
+	for i := 0; i < 20; i++ {
+		d = p.Check(req("acme"))
+		if d.Allow {
+			t.Fatalf("call %d admitted while over budget", i)
+		}
+	}
+
+	if hasSignal(d.Signals, SignalAuthFailureRate) {
+		t.Errorf("the ladder's own denials tripped the auth-failure signal: %+v", d.Signals)
+	}
+
+	st := statusFor(t, p, "acme")
+	if st.PolicyDenials == 0 {
+		t.Error("policy denials not recorded")
+	}
+	if st.AuthDenials != 0 {
+		t.Errorf("auth denials = %d, want 0 — no token-authorization failure occurred", st.AuthDenials)
+	}
+
+	// A genuine authorization failure still trips it.
+	for i := 0; i < 10; i++ {
+		p.RecordDenial("acme")
+	}
+	if d := p.Check(req("acme")); !hasSignal(d.Signals, SignalAuthFailureRate) {
+		t.Errorf("real auth failures no longer trip the signal: %+v", d.Signals)
+	}
+}

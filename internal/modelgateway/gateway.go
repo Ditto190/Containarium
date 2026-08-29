@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -201,6 +202,21 @@ func (g *Gateway) handleModel(w http.ResponseWriter, r *http.Request) {
 	// enable a final usage event so the SSE path is metered. Fail-open: any read
 	// error leaves the original body in place.
 	sysPrompt, reqModel := "", ""
+	// Anthropic carries the model in the request body and nowhere else — not in
+	// the path like Gemini, and it isn't OpenAI-shaped so it misses the branch
+	// below. Without this the model-switch signal is silent for the provider
+	// that skill boxes are provisioned for by default, and the lifecycle logs
+	// report an empty model for it. Read-only: no body rewriting, since
+	// ensureStreamUsage and extractSystemPrompt are OpenAI shapes.
+	if provName == "anthropic" {
+		if raw, rerr := io.ReadAll(r.Body); rerr == nil {
+			_ = r.Body.Close()
+			reqModel = requestModel(raw)
+			r.Body = io.NopCloser(bytes.NewReader(raw))
+			r.ContentLength = int64(len(raw))
+			r.Header.Set("Content-Length", strconv.Itoa(len(raw)))
+		}
+	}
 	if provName == "openai" || provName == "gemini-openai" {
 		if raw, rerr := io.ReadAll(r.Body); rerr == nil {
 			_ = r.Body.Close()
@@ -233,9 +249,11 @@ func (g *Gateway) handleModel(w http.ResponseWriter, r *http.Request) {
 		RemoteAddr: r.RemoteAddr,
 	}); !dec.Allow {
 		if dec.RetryAfter > 0 {
-			// Round up: a Retry-After of 0 invites an immediate retry, which is
-			// the opposite of what a throttle is for.
-			secs := int(dec.RetryAfter.Seconds())
+			// Round UP, and floor at 1. Truncating 59.4s to 59 tells a
+			// well-behaved client to come back while the circuit is still
+			// open, so it gets denied again — and a Retry-After of 0 invites
+			// an immediate retry, which is the opposite of a throttle.
+			secs := int(math.Ceil(dec.RetryAfter.Seconds()))
 			if secs < 1 {
 				secs = 1
 			}

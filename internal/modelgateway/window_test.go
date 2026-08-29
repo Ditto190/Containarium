@@ -1,6 +1,7 @@
 package modelgateway
 
 import (
+	"strconv"
 	"testing"
 	"time"
 )
@@ -128,5 +129,35 @@ func TestSourceNet(t *testing.T) {
 		if got := sourceNet(c.in); got != c.want {
 			t.Errorf("sourceNet(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// The endpoint and model sets are keyed on caller-controlled input, so an
+// unbounded map would let one box grow a tenant's state without limit for the
+// whole novelty TTL and make every observation's scan more expensive.
+func TestRecentSet_BoundedAndEvictsOldest(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	s := newRecentSet(24 * time.Hour)
+
+	now := base
+	for i := 0; i < maxRecentValues*20; i++ {
+		now = now.Add(time.Second)
+		s.observe(now, "/v1/"+strconv.Itoa(i))
+	}
+	if n := s.len(now); n > maxRecentValues {
+		t.Errorf("set grew to %d, want <= %d", n, maxRecentValues)
+	}
+
+	// The most recent values survive; the oldest were evicted.
+	vals := s.values(now)
+	found := map[string]bool{}
+	for _, v := range vals {
+		found[v] = true
+	}
+	if !found["/v1/"+strconv.Itoa(maxRecentValues*20-1)] {
+		t.Error("most recent value was evicted")
+	}
+	if found["/v1/0"] {
+		t.Error("oldest value survived eviction")
 	}
 }

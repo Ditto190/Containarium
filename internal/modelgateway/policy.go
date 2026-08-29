@@ -375,8 +375,13 @@ func (p *Policy) target(q quotaUsage, sc float64) (PolicyState, string) {
 // transition moves the tenant onto want, applying immediate escalation and
 // damped de-escalation.
 func (p *Policy) transition(ts *tenantState, info RequestInfo, want PolicyState, reason string, now time.Time, sigs []Signal) {
-	// Manual revocation outranks everything and never expires on its own.
-	if ts.state == StateRevoke && ts.manualReason != "" {
+	// Revocation outranks everything and never expires on its own — however it
+	// was reached. Gating this on manualReason instead of the state itself
+	// would leave an automatic revocation (RevokeAt) non-sticky: the
+	// de-escalation case below would walk it back a rung per cooldown, so a
+	// token revoked for a high anomaly score would regain access simply by
+	// going quiet for five minutes. Only Clear leaves this state.
+	if ts.state == StateRevoke {
 		return
 	}
 
@@ -434,14 +439,14 @@ func (p *Policy) admit(ts *tenantState, now time.Time, q quotaUsage, sigs []Sign
 			d.Allow, d.Status = false, http.StatusTooManyRequests
 			d.Reason = "quota exceeded: " + p.cfg.Quota.describe(q)
 			d.RetryAfter = p.cfg.Quota.Window
-			ts.rateWindow.add(now, counts{denials: 1})
+			ts.rateWindow.add(now, counts{policyDenials: 1})
 			return d
 		}
 		if wait := p.cfg.ThrottleMinInterval - now.Sub(ts.lastAdmitted); wait > 0 && !ts.lastAdmitted.IsZero() {
 			d.Allow, d.Status = false, http.StatusTooManyRequests
 			d.Reason = "throttled"
 			d.RetryAfter = wait
-			ts.rateWindow.add(now, counts{denials: 1})
+			ts.rateWindow.add(now, counts{policyDenials: 1})
 			return d
 		}
 		ts.lastAdmitted = now
@@ -454,7 +459,7 @@ func (p *Policy) admit(ts *tenantState, now time.Time, q quotaUsage, sigs []Sign
 		if d.RetryAfter < 0 {
 			d.RetryAfter = 0
 		}
-		ts.rateWindow.add(now, counts{denials: 1})
+		ts.rateWindow.add(now, counts{policyDenials: 1})
 		return d
 
 	case StateRevoke:
@@ -463,7 +468,7 @@ func (p *Policy) admit(ts *tenantState, now time.Time, q quotaUsage, sigs []Sign
 		if ts.manualReason != "" {
 			d.Reason = "revoked: " + ts.manualReason
 		}
-		ts.rateWindow.add(now, counts{denials: 1})
+		ts.rateWindow.add(now, counts{policyDenials: 1})
 		return d
 	}
 	return d
@@ -518,7 +523,7 @@ func (p *Policy) RecordDenial(tenant string) {
 	ts := p.state(tenant)
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
-	ts.rateWindow.add(now, counts{denials: 1})
+	ts.rateWindow.add(now, counts{authDenials: 1})
 }
 
 // Revoke puts a tenant on the sticky rung until Clear. The operator escape
@@ -555,19 +560,24 @@ func (p *Policy) Clear(tenant string) {
 
 // TenantStatus is the ops readout for one tenant.
 type TenantStatus struct {
-	Tenant      string      `json:"tenant"`
-	State       PolicyState `json:"state"`
-	Since       time.Time   `json:"since"`
-	Score       float64     `json:"anomaly_score"`
-	Quota       float64     `json:"quota_fraction"`
-	Calls       int64       `json:"calls_in_window"`
-	Tokens      int64       `json:"tokens_in_window"`
-	Denials     int64       `json:"denials_in_window"`
-	Baseline    float64     `json:"baseline_tokens_per_sec"`
-	Samples     int         `json:"baseline_samples"`
-	SourceNets  []string    `json:"source_nets,omitempty"`
-	Signals     []Signal    `json:"signals,omitempty"`
-	RevokeCause string      `json:"revoke_cause,omitempty"`
+	Tenant string      `json:"tenant"`
+	State  PolicyState `json:"state"`
+	Since  time.Time   `json:"since"`
+	Score  float64     `json:"anomaly_score"`
+	Quota  float64     `json:"quota_fraction"`
+	Calls  int64       `json:"calls_in_window"`
+	Tokens int64       `json:"tokens_in_window"`
+	// AuthDenials are token-authorization failures; PolicyDenials are this
+	// ladder's own refusals. Reported apart because conflating them is what
+	// made enforcement self-amplifying — see counts in window.go.
+	AuthDenials   int64    `json:"auth_denials_in_window"`
+	PolicyDenials int64    `json:"policy_denials_in_window"`
+	Baseline      float64  `json:"baseline_tokens_per_sec"`
+	Samples       int      `json:"baseline_samples"`
+	Models        []string `json:"models,omitempty"`
+	SourceNets    []string `json:"source_nets,omitempty"`
+	Signals       []Signal `json:"signals,omitempty"`
+	RevokeCause   string   `json:"revoke_cause,omitempty"`
 }
 
 // Status snapshots every known tenant, worst rung first, for /__gateway/policy.
@@ -588,19 +598,21 @@ func (p *Policy) Status() []TenantStatus {
 		w := ts.rateWindow.sum(now)
 		base, samples := ts.baseline.get()
 		out = append(out, TenantStatus{
-			Tenant:      names[i],
-			State:       ts.state,
-			Since:       ts.stateSince,
-			Score:       ts.lastScore,
-			Quota:       ts.lastQuota,
-			Calls:       w.calls,
-			Tokens:      w.totalTokens(),
-			Denials:     w.denials,
-			Baseline:    base,
-			Samples:     samples,
-			SourceNets:  ts.sourceNets.values(now),
-			Signals:     ts.lastSignals,
-			RevokeCause: ts.manualReason,
+			Tenant:        names[i],
+			State:         ts.state,
+			Since:         ts.stateSince,
+			Score:         ts.lastScore,
+			Quota:         ts.lastQuota,
+			Calls:         w.calls,
+			Tokens:        w.totalTokens(),
+			AuthDenials:   w.authDenials,
+			PolicyDenials: w.policyDenials,
+			Baseline:      base,
+			Samples:       samples,
+			Models:        ts.models.values(now),
+			SourceNets:    ts.sourceNets.values(now),
+			Signals:       ts.lastSignals,
+			RevokeCause:   ts.manualReason,
 		})
 		ts.mu.Unlock()
 	}
