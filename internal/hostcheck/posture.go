@@ -54,6 +54,7 @@ type posturePaths struct {
 	sshdConfig     string // /etc/ssh/sshd_config
 	sshdConfigDir  string // /etc/ssh/sshd_config.d
 	aptPeriodic    string // /etc/apt/apt.conf.d/20auto-upgrades
+	tunnelUnit     string // /etc/systemd/system/containarium-tunnel.service
 	incusDataDir   string // /var/lib/incus — the volume that holds tenant data
 	recoveryDir    string // /mnt/incus-data — where containarium-recovery.yaml is written (#1154)
 	metadataDialer func() error
@@ -68,6 +69,7 @@ func defaultPosturePaths() posturePaths {
 		sshdConfig:     "/etc/ssh/sshd_config",
 		sshdConfigDir:  "/etc/ssh/sshd_config.d",
 		aptPeriodic:    "/etc/apt/apt.conf.d/20auto-upgrades",
+		tunnelUnit:     "/etc/systemd/system/containarium-tunnel.service",
 		incusDataDir:   "/var/lib/incus",
 		recoveryDir:    DefaultRecoveryDir,
 		metadataDialer: dialMetadataServer,
@@ -95,6 +97,7 @@ func runPosture(p posturePaths) []Check {
 		unattendedUpgradesCheck(p),
 		metadataReachableCheck(p),
 		recoveryConfigDurableCheck(p),
+		tunnelTokenExposedCheck(p),
 	}
 	for i := range checks {
 		checks[i].Kind = KindPosture
@@ -458,6 +461,72 @@ func metadataReachableCheck(p posturePaths) Check {
 	}
 	c.Detail = "169.254.169.254:80 is reachable from the host: a workload that escapes its container can reach instance credentials"
 	return c
+}
+
+// --- tunnel token exposure --------------------------------------------
+
+// tunnelTokenExposedCheck reports whether the pool-join tunnel unit still
+// carries its authentication token on the (world-readable, 0644) ExecStart
+// line — the pattern this repo's own commit a9cc8a4 moved off of
+// ("fix(cmd): tunnel-handshake token via EnvironmentFile, not ExecStart",
+// #965): current `pool join` writes the token to a root-only (0600)
+// EnvironmentFile= instead. A host joined before that fix, or whose unit
+// was hand-edited back to the old form, keeps a live bearer-equivalent
+// credential readable by any local user via `systemctl show -p ExecStart`,
+// `ps`, or journald (cloud#1074).
+//
+// OK means the token is NOT on the ExecStart line. A missing unit is
+// reported as unknown rather than an implicit pass: the host may simply
+// not be tunnel-joined, but that is indistinguishable here from "the unit
+// was moved/renamed", so it stays unknown per rule 1 above.
+func tunnelTokenExposedCheck(p posturePaths) Check {
+	c := Check{Name: "tunnel unit does not carry its token on ExecStart"}
+
+	data, err := os.ReadFile(p.tunnelUnit) // #nosec G304 -- package-owned constant, overridden only by tests
+	if err != nil {
+		c.Detail = fmt.Sprintf("could not determine: reading %s: %v", p.tunnelUnit, err)
+		return c
+	}
+
+	execStart := extractExecStart(string(data))
+	if execStart == "" {
+		c.Detail = fmt.Sprintf("could not determine: no ExecStart= line found in %s", p.tunnelUnit)
+		return c
+	}
+	if strings.Contains(execStart, "--token") {
+		c.Detail = fmt.Sprintf("%s's ExecStart carries --token — rotate this host's tunnel token and re-run "+
+			"`containarium pool join` to regenerate the unit via EnvironmentFile=", p.tunnelUnit)
+		return c
+	}
+	c.OK = true
+	c.Detail = "ExecStart does not carry --token"
+	return c
+}
+
+// extractExecStart concatenates a (possibly line-continued with a trailing
+// "\") ExecStart= directive's value out of a systemd unit file's raw text.
+// Returns "" if the unit has no ExecStart= line at all.
+func extractExecStart(unit string) string {
+	var parts []string
+	inExecStart := false
+	for _, raw := range strings.Split(unit, "\n") {
+		line := strings.TrimRight(raw, "\r")
+		if !inExecStart {
+			if !strings.HasPrefix(line, "ExecStart=") {
+				continue
+			}
+			inExecStart = true
+		}
+		cont := strings.HasSuffix(line, `\`)
+		parts = append(parts, strings.TrimSuffix(line, `\`))
+		if !cont {
+			break
+		}
+	}
+	if !inExecStart {
+		return ""
+	}
+	return strings.Join(parts, " ")
 }
 
 // dialMetadataServer attempts a short TCP connect to the link-local
