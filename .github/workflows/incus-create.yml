@@ -75,21 +75,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
-      # #1614: this lane is disk-heavy (a 20G ZFS pool, a full Incus
-      # install, a distro image pull, and two separate `go` builds/test
-      # runs) on a stock ubuntu-latest runner. Three CI runs failed with an
-      # identical signature — dozens of core stdlib packages suddenly
-      # unresolvable partway through the SAME job, right as the SECOND go
-      # invocation started, seconds after the FIRST one finished cleanly —
-      # which points at something evicting part of the Go toolchain
-      # mid-job rather than a toolchain that was never installed right.
-      # ubuntu-latest ships ~20-30G of preinstalled toolchains this lane
-      # never touches (dotnet, the Android SDK, GHC); freeing them before
-      # anything disk-heavy starts is the standard, low-risk mitigation for
-      # exactly this failure class. The before/after df -h is the
-      # diagnostic #1614 asked for — if the failure recurs, these numbers
-      # confirm or rule out disk pressure with real evidence instead of
-      # another guess.
+      # #1614's actual root cause turned out NOT to be disk pressure — a
+      # live run of this exact step showed 86G free before, 102G after,
+      # nowhere near tight (the real cause, fixed at the "Create an
+      # encrypted container" step below, was a root-owned Go build cache).
+      # Kept anyway as ordinary hygiene: ubuntu-latest ships ~20-30G of
+      # preinstalled toolchains this lane never touches, freeing them
+      # before anything disk-heavy starts costs nothing and gives every
+      # later step more headroom.
       - name: Free disk space
         run: |
           set -euo pipefail
@@ -261,13 +254,21 @@ jobs:
           JWT_SECRET: lane-only-secret-not-a-credential
         run: |
           set -euo pipefail
-          # #1614 diagnostic: this exact point — the second `go build` in
-          # the job, seconds after the first `go test` finished clean — is
-          # precisely where 3 prior runs lost the stdlib. If it recurs,
-          # this line puts real disk numbers next to the failure instead
-          # of leaving it a guess.
-          df -h /
-          go build -o /tmp/containarium ./cmd/containarium
+          # #1614, root-caused: this build used to run as the plain runner
+          # user, right after the PRIOR step's `sudo -E env "PATH=$PATH" go
+          # test` — which runs AS ROOT but with $HOME still pointing at
+          # /home/runner (that's what -E preserves), so it writes fresh
+          # build-cache entries into /home/runner/.cache/go-build OWNED BY
+          # ROOT. This build then couldn't read its own cache: "open
+          # .../go-build/...: permission denied" was the actual error,
+          # buried under a wall of "package X is not in std" — Go's import
+          # resolution reports an unreadable cache entry that way, which is
+          # what made three prior runs look like random toolchain
+          # corruption instead of a deterministic ownership mismatch.
+          # Matching the prior step's privilege level (sudo -E, same
+          # preserved $PATH/$HOME) makes both go invocations share the
+          # cache under the SAME effective owner.
+          sudo -E env "PATH=$PATH" go build -o /tmp/containarium ./cmd/containarium
           sudo mkdir -p /etc/containarium/keys
 
           # --standalone skips the core LXCs (Postgres, Caddy). With no
