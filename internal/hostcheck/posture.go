@@ -47,32 +47,34 @@ import (
 // real host — a posture check that can only be tested on a correctly
 // hardened machine is a posture check nobody will ever run red.
 type posturePaths struct {
-	procMounts     string // /proc/mounts
-	sysBlock       string // /sys/block
-	efiVars        string // /sys/firmware/efi/efivars
-	auditdPID      string // /run/auditd.pid
-	sshdConfig     string // /etc/ssh/sshd_config
-	sshdConfigDir  string // /etc/ssh/sshd_config.d
-	aptPeriodic    string // /etc/apt/apt.conf.d/20auto-upgrades
-	tunnelUnit     string // /etc/systemd/system/containarium-tunnel.service
-	incusDataDir   string // /var/lib/incus — the volume that holds tenant data
-	recoveryDir    string // /mnt/incus-data — where containarium-recovery.yaml is written (#1154)
-	metadataDialer func() error
+	procMounts       string // /proc/mounts
+	sysBlock         string // /sys/block
+	efiVars          string // /sys/firmware/efi/efivars
+	auditdPID        string // /run/auditd.pid
+	sshdConfig       string // /etc/ssh/sshd_config
+	sshdConfigDir    string // /etc/ssh/sshd_config.d
+	aptPeriodic      string // /etc/apt/apt.conf.d/20auto-upgrades
+	tunnelUnit       string // /etc/systemd/system/containarium-tunnel.service
+	tunnelUnitDropIn string // /etc/systemd/system/containarium-tunnel.service.d
+	incusDataDir     string // /var/lib/incus — the volume that holds tenant data
+	recoveryDir      string // /mnt/incus-data — where containarium-recovery.yaml is written (#1154)
+	metadataDialer   func() error
 }
 
 func defaultPosturePaths() posturePaths {
 	return posturePaths{
-		procMounts:     "/proc/mounts",
-		sysBlock:       "/sys/block",
-		efiVars:        "/sys/firmware/efi/efivars",
-		auditdPID:      "/run/auditd.pid",
-		sshdConfig:     "/etc/ssh/sshd_config",
-		sshdConfigDir:  "/etc/ssh/sshd_config.d",
-		aptPeriodic:    "/etc/apt/apt.conf.d/20auto-upgrades",
-		tunnelUnit:     "/etc/systemd/system/containarium-tunnel.service",
-		incusDataDir:   "/var/lib/incus",
-		recoveryDir:    DefaultRecoveryDir,
-		metadataDialer: dialMetadataServer,
+		procMounts:       "/proc/mounts",
+		sysBlock:         "/sys/block",
+		efiVars:          "/sys/firmware/efi/efivars",
+		auditdPID:        "/run/auditd.pid",
+		sshdConfig:       "/etc/ssh/sshd_config",
+		sshdConfigDir:    "/etc/ssh/sshd_config.d",
+		aptPeriodic:      "/etc/apt/apt.conf.d/20auto-upgrades",
+		tunnelUnit:       "/etc/systemd/system/containarium-tunnel.service",
+		tunnelUnitDropIn: "/etc/systemd/system/containarium-tunnel.service.d",
+		incusDataDir:     "/var/lib/incus",
+		recoveryDir:      DefaultRecoveryDir,
+		metadataDialer:   dialMetadataServer,
 	}
 }
 
@@ -482,51 +484,128 @@ func metadataReachableCheck(p posturePaths) Check {
 func tunnelTokenExposedCheck(p posturePaths) Check {
 	c := Check{Name: "tunnel unit does not carry its token on ExecStart"}
 
-	data, err := os.ReadFile(p.tunnelUnit) // #nosec G304 -- package-owned constant, overridden only by tests
+	execStart, ok, err := effectiveExecStart(p.tunnelUnit, p.tunnelUnitDropIn)
 	if err != nil {
 		c.Detail = fmt.Sprintf("could not determine: reading %s: %v", p.tunnelUnit, err)
 		return c
 	}
-
-	execStart := extractExecStart(string(data))
-	if execStart == "" {
-		c.Detail = fmt.Sprintf("could not determine: no ExecStart= line found in %s", p.tunnelUnit)
+	if !ok {
+		c.Detail = fmt.Sprintf("could not determine: no effective ExecStart= found for %s (base file or its .service.d drop-ins)", p.tunnelUnit)
 		return c
 	}
 	if strings.Contains(execStart, "--token") {
-		c.Detail = fmt.Sprintf("%s's ExecStart carries --token — rotate this host's tunnel token and re-run "+
+		c.Detail = fmt.Sprintf("%s's effective ExecStart carries --token — rotate this host's tunnel token and re-run "+
 			"`containarium pool join` to regenerate the unit via EnvironmentFile=", p.tunnelUnit)
 		return c
 	}
 	c.OK = true
-	c.Detail = "ExecStart does not carry --token"
+	c.Detail = "effective ExecStart does not carry --token"
 	return c
 }
 
-// extractExecStart concatenates a (possibly line-continued with a trailing
-// "\") ExecStart= directive's value out of a systemd unit file's raw text.
-// Returns "" if the unit has no ExecStart= line at all.
-func extractExecStart(unit string) string {
-	var parts []string
-	inExecStart := false
-	for _, raw := range strings.Split(unit, "\n") {
-		line := strings.TrimRight(raw, "\r")
-		if !inExecStart {
-			if !strings.HasPrefix(line, "ExecStart=") {
+// effectiveExecStart resolves the EFFECTIVE ExecStart= across unitPath and
+// its .service.d/ drop-ins, in systemd's own override order — drop-ins
+// apply, lexically sorted, AFTER the base file. A check that reads only
+// the base file can be defeated by a drop-in the base file has no idea
+// about (cloud#1074 review follow-up): nothing in this repo creates a
+// drop-in for the TUNNEL unit today, but the daemon unit's OWN drop-in
+// (renderPoolDropIn) already establishes the override idiom this resolves
+// — a bare "ExecStart=" directive (this codebase's documented reset
+// convention) clears whatever was accumulated so far, and a subsequent
+// non-empty "ExecStart=<cmd>" sets the new effective value. Built on
+// extractExecStart, which already distinguishes "no ExecStart= line in
+// this source" ("") from "an explicit bare reset" (the literal string
+// "ExecStart=") — see its own doc comment.
+//
+// Returns ok=false if NO source (base or any drop-in) ever set an
+// effective ExecStart= — unknown, not a pass, per rule 1 above.
+func effectiveExecStart(unitPath, dropInDir string) (string, bool, error) {
+	base, err := os.ReadFile(unitPath) // #nosec G304 -- package-owned constant, overridden only by tests
+	if err != nil {
+		return "", false, err
+	}
+	sources := []string{string(base)}
+
+	entries, derr := os.ReadDir(dropInDir) // #nosec G304 -- package-owned constant, overridden only by tests
+	if derr == nil {
+		var names []string
+		for _, e := range entries {
+			if strings.HasSuffix(e.Name(), ".conf") {
+				names = append(names, e.Name())
+			}
+		}
+		sort.Strings(names) // systemd globs *.conf; lexical order is what it gets
+		for _, n := range names {
+			d, rerr := os.ReadFile(filepath.Join(dropInDir, filepath.Base(n))) // #nosec G304 -- dropInDir is package-owned/test-overridden; n is Base()-bounded
+			if rerr != nil {
 				continue
 			}
-			inExecStart = true
-		}
-		cont := strings.HasSuffix(line, `\`)
-		parts = append(parts, strings.TrimSuffix(line, `\`))
-		if !cont {
-			break
+			sources = append(sources, string(d))
 		}
 	}
-	if !inExecStart {
+
+	// Every source can itself contain MULTIPLE ExecStart= directives — the
+	// reset-then-set idiom (renderPoolDropIn's own pattern) puts both in
+	// ONE drop-in file — so each source's directives are walked and
+	// applied in order, not just its first.
+	current := ""
+	found := false
+	for _, src := range sources {
+		for _, v := range allExecStartDirectives(src) {
+			switch {
+			case strings.TrimSpace(v) == "ExecStart=":
+				// Bare reset: systemd's documented idiom for a drop-in to
+				// clear the base unit's ExecStart before setting its own —
+				// this codebase's own renderPoolDropIn uses exactly this.
+				current, found = "", false
+			default:
+				current, found = v, true
+			}
+		}
+	}
+	return current, found, nil
+}
+
+// extractExecStart concatenates a (possibly line-continued with a trailing
+// "\") ExecStart= directive's value out of a systemd unit file's raw text —
+// the FIRST one found. Returns "" if the unit has no ExecStart= line at
+// all. Kept as the single-directive convenience wrapper over
+// allExecStartDirectives.
+func extractExecStart(unit string) string {
+	d := allExecStartDirectives(unit)
+	if len(d) == 0 {
 		return ""
 	}
-	return strings.Join(parts, " ")
+	return d[0]
+}
+
+// allExecStartDirectives returns EVERY ExecStart= directive found in unit,
+// in order, each with its own (possibly line-continued via a trailing "\")
+// value joined. Unlike taking just the first, this is what
+// effectiveExecStart needs: a single drop-in file commonly contains BOTH a
+// bare reset ("ExecStart=") and its replacement together, and both must be
+// seen to resolve correctly.
+func allExecStartDirectives(unit string) []string {
+	var directives []string
+	lines := strings.Split(unit, "\n")
+	for i := 0; i < len(lines); i++ {
+		line := strings.TrimRight(lines[i], "\r")
+		if !strings.HasPrefix(line, "ExecStart=") {
+			continue
+		}
+		var parts []string
+		for {
+			cont := strings.HasSuffix(line, `\`)
+			parts = append(parts, strings.TrimSuffix(line, `\`))
+			if !cont || i+1 >= len(lines) {
+				break
+			}
+			i++
+			line = strings.TrimRight(lines[i], "\r")
+		}
+		directives = append(directives, strings.Join(parts, " "))
+	}
+	return directives
 }
 
 // dialMetadataServer attempts a short TCP connect to the link-local

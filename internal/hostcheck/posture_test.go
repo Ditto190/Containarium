@@ -25,15 +25,16 @@ func tempPaths(t *testing.T) (posturePaths, string) {
 	t.Helper()
 	dir := t.TempDir()
 	return posturePaths{
-		procMounts:    filepath.Join(dir, "mounts"),
-		sysBlock:      filepath.Join(dir, "sys-block"),
-		efiVars:       filepath.Join(dir, "efivars"),
-		auditdPID:     filepath.Join(dir, "auditd.pid"),
-		sshdConfig:    filepath.Join(dir, "sshd_config"),
-		sshdConfigDir: filepath.Join(dir, "sshd_config.d"),
-		aptPeriodic:   filepath.Join(dir, "20auto-upgrades"),
-		tunnelUnit:    filepath.Join(dir, "containarium-tunnel.service"),
-		incusDataDir:  "/var/lib/incus",
+		procMounts:       filepath.Join(dir, "mounts"),
+		sysBlock:         filepath.Join(dir, "sys-block"),
+		efiVars:          filepath.Join(dir, "efivars"),
+		auditdPID:        filepath.Join(dir, "auditd.pid"),
+		sshdConfig:       filepath.Join(dir, "sshd_config"),
+		sshdConfigDir:    filepath.Join(dir, "sshd_config.d"),
+		aptPeriodic:      filepath.Join(dir, "20auto-upgrades"),
+		tunnelUnit:       filepath.Join(dir, "containarium-tunnel.service"),
+		tunnelUnitDropIn: filepath.Join(dir, "containarium-tunnel.service.d"),
+		incusDataDir:     "/var/lib/incus",
 		// Default to "blocked", the desirable state, so a test that isn't
 		// about the metadata check doesn't accidentally depend on the
 		// network of the machine running it.
@@ -409,6 +410,79 @@ func TestTunnelTokenExposedCheck(t *testing.T) {
 		c := tunnelTokenExposedCheck(p)
 		if c.OK || !strings.Contains(c.Detail, "could not determine") {
 			t.Errorf("no ExecStart= should be unknown, got OK=%v %q", c.OK, c.Detail)
+		}
+	})
+
+	// The CodeRabbit follow-up on cloud#1074: a check that reads only the
+	// base unit file can be defeated by a drop-in overriding ExecStart=.
+	t.Run("drop-in overriding ExecStart with --token fails even though the base file is safe", func(t *testing.T) {
+		p, _ := tempPaths(t)
+		write(t, p.tunnelUnit, "[Unit]\nDescription=Containarium Tunnel Client\n\n"+
+			"[Service]\nType=simple\n"+
+			"EnvironmentFile=/etc/containarium/tunnel-token.env\n"+
+			"ExecStart=/usr/local/bin/containarium tunnel --spot-id fts-13700k --pool fts\n"+
+			"Restart=always\n")
+		write(t, filepath.Join(p.tunnelUnitDropIn, "10-override.conf"),
+			"[Service]\nExecStart=\n"+
+				"ExecStart=/usr/local/bin/containarium tunnel --token abc123scopedtoken --spot-id fts-13700k --pool fts\n")
+
+		c := tunnelTokenExposedCheck(p)
+		if c.OK {
+			t.Error("a drop-in overriding ExecStart with --token must fail this check even though the base file is safe")
+		}
+		if !strings.Contains(c.Detail, "--token") {
+			t.Errorf("detail should name what was found, got %q", c.Detail)
+		}
+	})
+
+	t.Run("drop-in overriding ExecStart with the safe form passes", func(t *testing.T) {
+		p, _ := tempPaths(t)
+		// Base file is deliberately the STALE/unsafe pattern; the drop-in
+		// (lexically after it, systemd's own override order) replaces it
+		// with the safe EnvironmentFile= form — the effective command must
+		// be judged by what actually runs, not by the base file alone.
+		write(t, p.tunnelUnit, "[Unit]\nDescription=Containarium Tunnel Client\n\n"+
+			"[Service]\nType=simple\n"+
+			"ExecStart=/usr/local/bin/containarium tunnel --token abc123scopedtoken --spot-id fts-13700k --pool fts\n"+
+			"Restart=always\n")
+		write(t, filepath.Join(p.tunnelUnitDropIn, "10-override.conf"),
+			"[Service]\nExecStart=\n"+
+				"ExecStart=/usr/local/bin/containarium tunnel --spot-id fts-13700k --pool fts\n")
+
+		c := tunnelTokenExposedCheck(p)
+		if !c.OK {
+			t.Errorf("a drop-in replacing the stale base ExecStart with the safe form must pass: %s", c.Detail)
+		}
+	})
+
+	t.Run("drop-in with no ExecStart directive leaves the base file's value in effect", func(t *testing.T) {
+		p, _ := tempPaths(t)
+		write(t, p.tunnelUnit, "[Unit]\nDescription=Containarium Tunnel Client\n\n"+
+			"[Service]\nType=simple\n"+
+			"ExecStart=/usr/local/bin/containarium tunnel --token abc123scopedtoken --spot-id fts-13700k --pool fts\n"+
+			"Restart=always\n")
+		write(t, filepath.Join(p.tunnelUnitDropIn, "10-unrelated.conf"), "[Service]\nRestart=on-failure\n")
+
+		c := tunnelTokenExposedCheck(p)
+		if c.OK {
+			t.Error("a drop-in with no ExecStart= directive must not mask the base file's --token")
+		}
+	})
+
+	t.Run("multiple drop-ins apply in lexical order, later wins", func(t *testing.T) {
+		p, _ := tempPaths(t)
+		write(t, p.tunnelUnit, "[Unit]\nDescription=Containarium Tunnel Client\n\n"+
+			"[Service]\nType=simple\n"+
+			"ExecStart=/usr/local/bin/containarium tunnel --spot-id fts-13700k --pool fts\n"+
+			"Restart=always\n")
+		write(t, filepath.Join(p.tunnelUnitDropIn, "10-first.conf"),
+			"[Service]\nExecStart=\nExecStart=/usr/local/bin/containarium tunnel --token abc123scopedtoken --pool fts\n")
+		write(t, filepath.Join(p.tunnelUnitDropIn, "90-later.conf"),
+			"[Service]\nExecStart=\nExecStart=/usr/local/bin/containarium tunnel --spot-id fts-13700k --pool fts\n")
+
+		c := tunnelTokenExposedCheck(p)
+		if !c.OK {
+			t.Errorf("the lexically-last drop-in must win: %s", c.Detail)
 		}
 	})
 }
