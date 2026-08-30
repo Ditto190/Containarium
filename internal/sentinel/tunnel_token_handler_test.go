@@ -3,8 +3,11 @@ package sentinel
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"sync"
 	"testing"
 
 	"github.com/footprintai/containarium/internal/auth"
@@ -300,6 +303,41 @@ func TestTunnelTokenDeregisterHandler_UnknownTokenIsNoContentNotError(t *testing
 	}
 }
 
+// TestTunnelTokenDeregisterHandler_PersistFailureIsAServerErrorNot204 is
+// the review follow-up on cloud#999 step 4: reporting 204 when the durable
+// record wasn't actually written would tell a decommission caller "done"
+// for a token that WILL reappear after the next restart, with no reason
+// to retry. The in-memory Deny must still take effect immediately (the
+// safe direction) even though the response reports failure.
+func TestTunnelTokenDeregisterHandler_PersistFailureIsAServerErrorNot204(t *testing.T) {
+	m := newManagerForTunnelTokenTest(t, true)
+	m.tunnelPolicy.Allow("live-token", PoolAny)
+
+	// Force SaveTunnelTokenStore to fail: point the store path at
+	// "<blocker-file>/tunnel-tokens.json", so its os.MkdirAll(dir) fails
+	// because "blocker" already exists as a regular file, not a directory.
+	blocker := t.TempDir() + "/blocker"
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("create blocker file: %v", err)
+	}
+	m.SetTunnelTokenStorePath(blocker + "/tunnel-tokens.json")
+
+	body, _ := json.Marshal(TunnelTokenDeregisterRequest{Token: "live-token"})
+	req := httptest.NewRequest(http.MethodDelete, "/sentinel/tunnel-tokens", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	auth.SignSentinelRequest(req, []byte(tunnelTokenAdminSecret))
+	rec := httptest.NewRecorder()
+	handler := auth.SentinelHMACMiddleware([]byte(tunnelTokenAdminSecret), m.TunnelTokenDeregisterHandler())
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500 when persistence fails, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if err := m.tunnelPolicy.Validate("live-token", ""); err == nil {
+		t.Fatal("token must still be denied in-memory even though the response reported a persist failure")
+	}
+}
+
 // TestTunnelTokenDeregisterHandler_AdminSecretIndependentOfHMACSecret is
 // the deregister sibling of the same register-side guard: possessing the
 // cluster-wide daemon HMAC secret must not be sufficient to deregister
@@ -358,6 +396,84 @@ func TestTunnelTokenDeregisterHandler_AndRegisterCoexistOnOneMux(t *testing.T) {
 	}
 	if err := m.tunnelPolicy.Validate("mux-token", ""); err == nil {
 		t.Fatal("token still valid after deregistration via mux")
+	}
+}
+
+// TestConcurrentRegisterAndDeregister_NoLostUpdates is the regression test
+// for the CodeRabbit review follow-up on cloud#999 step 4: persist/unpersist
+// each do an unserialized load-modify-save against the SAME on-disk file,
+// so a register racing a deregister (or two concurrent calls of either)
+// could read the same snapshot and have whichever writes second silently
+// discard the other's change. Runs enough concurrent registrations that a
+// lost update would show up as a missing entry in the final store; with
+// tunnelTokenStoreMu serializing the whole sequence, none can be lost.
+func TestConcurrentRegisterAndDeregister_NoLostUpdates(t *testing.T) {
+	m := newManagerForTunnelTokenTest(t, true)
+	const n = 50
+
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			token := fmt.Sprintf("concurrent-token-%d", i)
+			body, _ := json.Marshal(TunnelTokenRegisterRequest{Token: token})
+			req := httptest.NewRequest(http.MethodPost, "/sentinel/tunnel-tokens", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			auth.SignSentinelRequest(req, []byte(tunnelTokenAdminSecret))
+			rec := httptest.NewRecorder()
+			m.TunnelTokenRegisterHandler()(rec, req)
+			if rec.Code != http.StatusNoContent {
+				t.Errorf("register %s: status = %d", token, rec.Code)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	entries, err := LoadTunnelTokenStore(m.tunnelTokenStorePath)
+	if err != nil {
+		t.Fatalf("LoadTunnelTokenStore: %v", err)
+	}
+	if len(entries) != n {
+		t.Fatalf("persisted store has %d entries, want %d — concurrent registrations lost an update", len(entries), n)
+	}
+
+	// Now deregister half of them concurrently, alongside no further
+	// registrations, and confirm exactly the other half survives.
+	wg = sync.WaitGroup{}
+	for i := 0; i < n; i += 2 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			token := fmt.Sprintf("concurrent-token-%d", i)
+			body, _ := json.Marshal(TunnelTokenDeregisterRequest{Token: token})
+			req := httptest.NewRequest(http.MethodDelete, "/sentinel/tunnel-tokens", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			auth.SignSentinelRequest(req, []byte(tunnelTokenAdminSecret))
+			rec := httptest.NewRecorder()
+			m.TunnelTokenDeregisterHandler()(rec, req)
+			if rec.Code != http.StatusNoContent {
+				t.Errorf("deregister %s: status = %d", token, rec.Code)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	entries, err = LoadTunnelTokenStore(m.tunnelTokenStorePath)
+	if err != nil {
+		t.Fatalf("LoadTunnelTokenStore after deregister: %v", err)
+	}
+	if len(entries) != n/2 {
+		t.Fatalf("persisted store has %d entries after deregistering half, want %d — a concurrent deregister lost an update or a register reappeared", len(entries), n/2)
+	}
+	for _, e := range entries {
+		var idx int
+		if _, err := fmt.Sscanf(e.Token, "concurrent-token-%d", &idx); err != nil {
+			t.Fatalf("unexpected surviving token %q", e.Token)
+		}
+		if idx%2 == 0 {
+			t.Errorf("token %q should have been deregistered but survived", e.Token)
+		}
 	}
 }
 

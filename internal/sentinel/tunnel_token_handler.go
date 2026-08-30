@@ -122,13 +122,22 @@ func (m *Manager) TunnelTokenDeregisterHandler() http.HandlerFunc {
 			return
 		}
 		m.tunnelPolicy.Deny(req.Token)
-		// Best-effort, same reasoning as the register side: the in-memory
-		// policy is already updated either way, and a disk hiccup here must
-		// not fail a legitimate deregistration — it only risks the token
-		// coming back on a future restart, which is the pre-existing #936
-		// failure mode in the opposite direction, not a new one.
+		// The in-memory Deny above stays applied even on a persist failure
+		// below — that's the safe direction, and undoing it would put a
+		// token BACK in effect that the caller just asked to revoke.
+		//
+		// But unlike the register side's best-effort persist (a disk
+		// hiccup there just means a legitimate host has to re-register —
+		// annoying, not dangerous), reporting SUCCESS here when the durable
+		// record wasn't actually written is a real problem: this is the
+		// call a decommission flow depends on to make sure a revoked token
+		// can never come back, and a caller that believed 204 has no reason
+		// to retry. Report the failure as retryable instead (review
+		// follow-up on cloud#999 step 4).
 		if err := m.unpersistTunnelToken(req.Token); err != nil {
-			log.Printf("[sentinel] WARNING: failed to persist tunnel token deregistration (may reappear after a restart): %v", err)
+			log.Printf("[sentinel] ERROR: failed to persist tunnel token deregistration (token denied in-memory now, but the on-disk store still lists it and it WILL reappear on the next restart): %v", err)
+			http.Error(w, `{"error":"token denied but persistence failed; retry"}`, http.StatusInternalServerError)
+			return
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
