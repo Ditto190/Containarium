@@ -57,6 +57,28 @@ func TestTokenPolicy_AllowReplaces(t *testing.T) {
 	assert.NoError(t, p.Validate("t", "lab"))
 }
 
+func TestTokenPolicy_Deny(t *testing.T) {
+	p := NewTokenPolicy()
+	p.Allow("t", "prod")
+	require.NoError(t, p.Validate("t", "prod"))
+
+	p.Deny("t")
+	err := p.Validate("t", "prod")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid token")
+}
+
+// Denying a token nobody ever Allow'd must not panic and must leave the
+// policy otherwise unaffected — a decommission racing (or repeating) a
+// deregister is the normal case, not an error condition.
+func TestTokenPolicy_DenyUnknownTokenIsANoOp(t *testing.T) {
+	p := NewTokenPolicy()
+	p.Allow("other", "prod")
+
+	assert.NotPanics(t, func() { p.Deny("never-registered") })
+	assert.NoError(t, p.Validate("other", "prod"))
+}
+
 func TestPolicyFromCLI(t *testing.T) {
 	t.Run("legacy token only", func(t *testing.T) {
 		p, err := PolicyFromCLI("legacy", nil)
