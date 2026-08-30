@@ -498,6 +498,25 @@ func (m *Manager) persistTunnelToken(token string, pools []Pool) error {
 	return SaveTunnelTokenStore(path, entries)
 }
 
+// unpersistTunnelToken removes token from the on-disk dynamic tunnel-token
+// store (cloud#999 step 4) so a future sentinel restart does not re-apply
+// a registration this process just revoked via TokenPolicy.Deny.
+// Best-effort at the call site, same reasoning as persistTunnelToken: the
+// in-memory policy is already updated either way, and a disk hiccup here
+// must not fail a legitimate deregistration.
+func (m *Manager) unpersistTunnelToken(token string) error {
+	path := m.tunnelTokenStorePath
+	if path == "" {
+		path = DefaultTunnelTokenStorePath
+	}
+	entries, err := LoadTunnelTokenStore(path)
+	if err != nil {
+		return err
+	}
+	entries = removeTunnelTokenEntry(entries, token)
+	return SaveTunnelTokenStore(path, entries)
+}
+
 // SetAdminSecret wires the secret that gates POST
 // /sentinel/tunnel-tokens. Tests can use this to inject a secret
 // without setting CONTAINARIUM_SENTINEL_ADMIN_SECRET in the

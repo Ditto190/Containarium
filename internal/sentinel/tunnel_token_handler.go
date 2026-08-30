@@ -76,3 +76,60 @@ func (m *Manager) TunnelTokenRegisterHandler() http.HandlerFunc {
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
+
+// TunnelTokenDeregisterRequest is the JSON body sent to
+// TunnelTokenDeregisterHandler to revoke a previously-registered token.
+type TunnelTokenDeregisterRequest struct {
+	// Token is the tunnel-handshake token to revoke — the inverse of
+	// TunnelTokenRegisterRequest.Token.
+	Token string `json:"token"`
+}
+
+// TunnelTokenDeregisterHandler is TunnelTokenRegisterHandler's inverse
+// (cloud#999 step 4): it makes a previously-registered tunnel token stop
+// validating, without a sentinel restart. Exists so decommissioning a BYOC
+// host can purge its tunnel-token registration from the sentinel — until
+// now, RegisterTunnelToken had no way to be undone short of restarting the
+// sentinel with a different --tunnel-token-policy.
+//
+// Gated by the SAME admin secret as registration (deliberately not the
+// cluster-wide daemon HMAC secret) — deregistering another host's token is
+// at least as sensitive a capability as registering one; a compromised
+// daemon must not be able to knock any other host off its tunnel just
+// because it holds the intra-cluster keysync secret.
+//
+// Deregistering a token that was never registered (or already was) is
+// success, not an error: a decommission caller cannot know in advance
+// whether registration ever landed, and the end state — this token does
+// not validate — is identical either way.
+func (m *Manager) TunnelTokenDeregisterHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		if m.tunnelPolicy == nil {
+			http.Error(w, `{"error":"tunnel mode not enabled on this sentinel","code":501}`, http.StatusNotImplemented)
+			return
+		}
+		var req TunnelTokenDeregisterRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+			return
+		}
+		if req.Token == "" {
+			http.Error(w, `{"error":"token is required"}`, http.StatusBadRequest)
+			return
+		}
+		m.tunnelPolicy.Deny(req.Token)
+		// Best-effort, same reasoning as the register side: the in-memory
+		// policy is already updated either way, and a disk hiccup here must
+		// not fail a legitimate deregistration — it only risks the token
+		// coming back on a future restart, which is the pre-existing #936
+		// failure mode in the opposite direction, not a new one.
+		if err := m.unpersistTunnelToken(req.Token); err != nil {
+			log.Printf("[sentinel] WARNING: failed to persist tunnel token deregistration (may reappear after a restart): %v", err)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}

@@ -83,6 +83,28 @@ func TestUpsertTunnelTokenEntry_ReplacesExistingPools(t *testing.T) {
 	}
 }
 
+func TestRemoveTunnelTokenEntry_DropsTheMatchingEntry(t *testing.T) {
+	entries := []TunnelTokenEntry{
+		{Token: "tok-a", Pools: []Pool{PoolAny}},
+		{Token: "tok-b", Pools: []Pool{"lab"}},
+	}
+	got := removeTunnelTokenEntry(entries, "tok-a")
+	if len(got) != 1 {
+		t.Fatalf("expected 1 entry left, got %d: %+v", len(got), got)
+	}
+	if got[0].Token != "tok-b" {
+		t.Errorf("wrong entry survived: %+v", got)
+	}
+}
+
+func TestRemoveTunnelTokenEntry_UnknownTokenIsANoOp(t *testing.T) {
+	entries := []TunnelTokenEntry{{Token: "tok-a", Pools: []Pool{PoolAny}}}
+	got := removeTunnelTokenEntry(entries, "does-not-exist")
+	if len(got) != 1 || got[0].Token != "tok-a" {
+		t.Errorf("removing an unknown token changed the set: %+v", got)
+	}
+}
+
 func TestSaveTunnelTokenStore_FileMode(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tunnel-tokens.json")
 	if err := SaveTunnelTokenStore(path, []TunnelTokenEntry{{Token: "tok-a", Pools: []Pool{PoolAny}}}); err != nil {

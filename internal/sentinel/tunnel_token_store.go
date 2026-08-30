@@ -104,3 +104,17 @@ func upsertTunnelTokenEntry(entries []TunnelTokenEntry, token string, pools []Po
 	}
 	return append(entries, TunnelTokenEntry{Token: token, Pools: pools})
 }
+
+// removeTunnelTokenEntry drops the entry matching token, if any. Pure —
+// used by the deregister handler to build the next full entry set before
+// calling SaveTunnelTokenStore. A token not present is a no-op: entries is
+// returned unchanged (same slice, no copy), mirroring upsert's use of the
+// caller-supplied slice as the working set.
+func removeTunnelTokenEntry(entries []TunnelTokenEntry, token string) []TunnelTokenEntry {
+	for i := range entries {
+		if entries[i].Token == token {
+			return append(entries[:i], entries[i+1:]...)
+		}
+	}
+	return entries
+}
