@@ -2,6 +2,8 @@ package incus
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -1359,7 +1361,8 @@ func stateWithRetry(what string, attempt func() (*api.InstanceState, string, err
 	return state, etag, err
 }
 
-// Exec executes a command inside a container
+// Exec executes a command inside a container. Unbounded wait — see
+// ExecWithTimeout for a caller that needs a deadline instead.
 func (c *Client) Exec(containerName string, command []string) error {
 	req := api.InstanceExecPost{
 		Command:     command,
@@ -1376,6 +1379,49 @@ func (c *Client) Exec(containerName string, command []string) error {
 		}
 		return nil
 	})
+}
+
+// ExecWithTimeout is Exec bounded by an explicit deadline (cloud#1128):
+// op.Wait() has no deadline of its own, so a wedged Incus operation — same
+// class of liblxc-socket flakiness this file already retries around for
+// GetInstanceState (isTransientStateErr, citing OSS #931) — blocks the
+// caller forever instead of surfacing an error. Deliberately a separate
+// method rather than a change to Exec's own behavior: Exec backs steps
+// (package installs, stack setup) that can legitimately run for minutes,
+// and a blanket default here would risk turning a slow-but-real operation
+// into a false "wedged" failure.
+func (c *Client) ExecWithTimeout(containerName string, command []string, timeout time.Duration) error {
+	req := api.InstanceExecPost{
+		Command:     command,
+		WaitForWS:   true,
+		Interactive: false,
+	}
+	return execWithRetry("exec "+containerName, func() error {
+		op, err := c.server.ExecInstance(containerName, req, nil)
+		if err != nil {
+			return fmt.Errorf("failed to execute command: %w", err)
+		}
+		return waitWithTimeout(timeout, op.WaitContext)
+	})
+}
+
+// waitWithTimeout bounds wait (an Operation.WaitContext-shaped call) by
+// timeout. Split out from ExecWithTimeout (mirroring waitForIP /
+// stateWithRetry elsewhere in this file) so the bounding behavior is unit-
+// tested without a real Incus server. A context.DeadlineExceeded is
+// reported as "wedged" rather than merely "cancelled" — this caller never
+// cancelled anything, so the distinction matters to whoever reads the log.
+func waitWithTimeout(timeout time.Duration, wait func(ctx context.Context) error) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	err := wait(ctx)
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("command execution timed out after %s (operation never completed — likely wedged, not merely slow)", timeout)
+	}
+	if err != nil {
+		return fmt.Errorf("command execution failed: %w", err)
+	}
+	return nil
 }
 
 // waitNetPollMin and waitNetPollMax bound the WaitForNetwork poll interval.

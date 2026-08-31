@@ -83,6 +83,45 @@ func TestUpsertTunnelTokenEntry_ReplacesExistingPools(t *testing.T) {
 	}
 }
 
+func TestRemoveTunnelTokenEntry_DropsTheMatchingEntry(t *testing.T) {
+	entries := []TunnelTokenEntry{
+		{Token: "tok-a", Pools: []Pool{PoolAny}},
+		{Token: "tok-b", Pools: []Pool{"lab"}},
+	}
+	got := removeTunnelTokenEntry(entries, "tok-a")
+	if len(got) != 1 {
+		t.Fatalf("expected 1 entry left, got %d: %+v", len(got), got)
+	}
+	if got[0].Token != "tok-b" {
+		t.Errorf("wrong entry survived: %+v", got)
+	}
+}
+
+// TestRemoveTunnelTokenEntry_DropsAllDuplicates: a persisted store should
+// never carry duplicates for the same token, but if one somehow exists (a
+// prior bug, a hand-edited file, a lost race), removal must not stop at
+// the first match — a surviving duplicate would reappear on the next
+// restart and silently undo the deregistration.
+func TestRemoveTunnelTokenEntry_DropsAllDuplicates(t *testing.T) {
+	entries := []TunnelTokenEntry{
+		{Token: "tok-a", Pools: []Pool{PoolAny}},
+		{Token: "tok-b", Pools: []Pool{"lab"}},
+		{Token: "tok-a", Pools: []Pool{"prod"}},
+	}
+	got := removeTunnelTokenEntry(entries, "tok-a")
+	if len(got) != 1 || got[0].Token != "tok-b" {
+		t.Fatalf("expected only tok-b to survive, got %+v", got)
+	}
+}
+
+func TestRemoveTunnelTokenEntry_UnknownTokenIsANoOp(t *testing.T) {
+	entries := []TunnelTokenEntry{{Token: "tok-a", Pools: []Pool{PoolAny}}}
+	got := removeTunnelTokenEntry(entries, "does-not-exist")
+	if len(got) != 1 || got[0].Token != "tok-a" {
+		t.Errorf("removing an unknown token changed the set: %+v", got)
+	}
+}
+
 func TestSaveTunnelTokenStore_FileMode(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tunnel-tokens.json")
 	if err := SaveTunnelTokenStore(path, []TunnelTokenEntry{{Token: "tok-a", Pools: []Pool{PoolAny}}}); err != nil {

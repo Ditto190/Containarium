@@ -36,6 +36,7 @@ type MockBackend struct {
 	ListContainersFunc        func() ([]incus.ContainerInfo, error)
 	WaitForNetworkFunc        func(containerName string, timeout time.Duration) (string, error)
 	ExecFunc                  func(containerName string, command []string) error
+	ExecWithTimeoutFunc       func(containerName string, command []string, timeout time.Duration) error
 	ExecWithOutputFunc        func(containerName string, command []string) (string, string, error)
 	ExecWithExitCodeFunc      func(containerName string, command []string) (string, string, int, error)
 	WriteFileFunc             func(containerName, path string, content []byte, mode string) error
@@ -153,6 +154,17 @@ func (m *MockBackend) Exec(containerName string, command []string) error {
 		return m.ExecFunc(containerName, command)
 	}
 	return nil
+}
+
+// ExecWithTimeout defaults to Exec's own behavior when ExecWithTimeoutFunc
+// is unset, so every existing test that only sets ExecFunc keeps working
+// unchanged even though MockBackend now also satisfies the (optional,
+// type-asserted) timed-exec capability real callers can detect.
+func (m *MockBackend) ExecWithTimeout(containerName string, command []string, timeout time.Duration) error {
+	if m.ExecWithTimeoutFunc != nil {
+		return m.ExecWithTimeoutFunc(containerName, command, timeout)
+	}
+	return m.Exec(containerName, command)
 }
 
 func (m *MockBackend) ExecWithOutput(containerName string, command []string) (string, string, error) {

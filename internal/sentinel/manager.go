@@ -219,6 +219,14 @@ type Manager struct {
 	// silently forget it. Empty means DefaultTunnelTokenStorePath; tests
 	// override via SetTunnelTokenStorePath to use a tmp dir.
 	tunnelTokenStorePath string
+	// tunnelTokenStoreMu serializes the WHOLE load-modify-save sequence in
+	// persistTunnelToken/unpersistTunnelToken (cloud#999 step 4 review
+	// follow-up): without it, a register racing a deregister (or two
+	// concurrent deregisters) can both read the same on-disk snapshot,
+	// and whichever writes second silently discards the other's change —
+	// a revoked token could reappear, or a freshly-registered one could
+	// vanish, purely from write-order luck.
+	tunnelTokenStoreMu sync.Mutex
 
 	// pki holds the operator-bootstrapped peer-CA and the sentinel's
 	// own server cert. Set when CONTAINARIUM_CA_KEY_FILE points at a
@@ -486,6 +494,8 @@ func (m *Manager) SetTunnelTokenStorePath(path string) {
 // across a restart, and a disk hiccup here must not block a legitimate
 // BYOC join.
 func (m *Manager) persistTunnelToken(token string, pools []Pool) error {
+	m.tunnelTokenStoreMu.Lock()
+	defer m.tunnelTokenStoreMu.Unlock()
 	path := m.tunnelTokenStorePath
 	if path == "" {
 		path = DefaultTunnelTokenStorePath
@@ -495,6 +505,27 @@ func (m *Manager) persistTunnelToken(token string, pools []Pool) error {
 		return err
 	}
 	entries = upsertTunnelTokenEntry(entries, token, pools)
+	return SaveTunnelTokenStore(path, entries)
+}
+
+// unpersistTunnelToken removes token from the on-disk dynamic tunnel-token
+// store (cloud#999 step 4) so a future sentinel restart does not re-apply
+// a registration this process just revoked via TokenPolicy.Deny.
+// Best-effort at the call site, same reasoning as persistTunnelToken: the
+// in-memory policy is already updated either way, and a disk hiccup here
+// must not fail a legitimate deregistration.
+func (m *Manager) unpersistTunnelToken(token string) error {
+	m.tunnelTokenStoreMu.Lock()
+	defer m.tunnelTokenStoreMu.Unlock()
+	path := m.tunnelTokenStorePath
+	if path == "" {
+		path = DefaultTunnelTokenStorePath
+	}
+	entries, err := LoadTunnelTokenStore(path)
+	if err != nil {
+		return err
+	}
+	entries = removeTunnelTokenEntry(entries, token)
 	return SaveTunnelTokenStore(path, entries)
 }
 
