@@ -1,12 +1,16 @@
 package container
 
 import (
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/footprintai/containarium/pkg/core/incus/incustest"
 	"github.com/footprintai/containarium/pkg/core/ostype"
 )
+
+var errWedgedForTest = errors.New("command execution timed out (simulated wedge)")
 
 // The collapse contract (#1488 Finding 2): identity seeding pays one
 // in-guest exec per function, not one per command. Each Incus Exec is a
@@ -103,6 +107,60 @@ func TestCreateUser_SingleExecPerFamily(t *testing.T) {
 				t.Errorf("sudoers write = %q mode %q", w.path, w.mode)
 			}
 		})
+	}
+}
+
+// TestCreateUser_UsesTheBackendsTimedExecWhenAvailable: createUser must
+// route through ExecWithTimeout (not the bare, unbounded Exec) whenever the
+// backend offers it — this is the whole fix for cloud#1128, where an
+// unbounded exec against a wedged Incus operation hung the creating
+// goroutine forever instead of ever reaching the terminal ERROR state.
+func TestCreateUser_UsesTheBackendsTimedExecWhenAvailable(t *testing.T) {
+	var gotTimeout time.Duration
+	timedCalled := false
+	mock := incustest.NewMockBackend()
+	mock.ExecFunc = func(_ string, _ []string) error {
+		t.Fatal("createUser called the bare Exec instead of the backend's ExecWithTimeout")
+		return nil
+	}
+	mock.ExecWithTimeoutFunc = func(_ string, _ []string, timeout time.Duration) error {
+		timedCalled = true
+		gotTimeout = timeout
+		return nil
+	}
+	m := NewWithBackend(mock)
+
+	if err := m.createUser("alice-container", "alice", ostype.Debian); err != nil {
+		t.Fatalf("createUser: %v", err)
+	}
+	if !timedCalled {
+		t.Fatal("ExecWithTimeout was never called")
+	}
+	if gotTimeout != createUserTimeout {
+		t.Errorf("timeout = %s, want createUserTimeout (%s)", gotTimeout, createUserTimeout)
+	}
+}
+
+// TestCreateUser_WedgedExecReturnsAnErrorInsteadOfHanging: mutation-shaped
+// proof that a backend reporting a timeout actually surfaces as createUser
+// returning an error — not silently swallowed, not blocking forever.
+func TestCreateUser_WedgedExecReturnsAnErrorInsteadOfHanging(t *testing.T) {
+	mock := incustest.NewMockBackend()
+	mock.ExecWithTimeoutFunc = func(_ string, _ []string, timeout time.Duration) error {
+		return errWedgedForTest
+	}
+	m := NewWithBackend(mock)
+
+	done := make(chan error, 1)
+	go func() { done <- m.createUser("c", "alice", ostype.Debian) }()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("want an error when the backend reports a wedged exec, got nil")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("createUser did not return — it hung despite the backend reporting an error")
 	}
 }
 

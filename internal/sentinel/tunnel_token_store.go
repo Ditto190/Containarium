@@ -104,3 +104,21 @@ func upsertTunnelTokenEntry(entries []TunnelTokenEntry, token string, pools []Po
 	}
 	return append(entries, TunnelTokenEntry{Token: token, Pools: pools})
 }
+
+// removeTunnelTokenEntry drops EVERY entry matching token, not just the
+// first — a persisted store should never carry duplicates for the same
+// token, but if one somehow exists (a prior bug, a hand-edited file, a
+// lost race), stopping at the first match would leave the duplicate
+// behind to reappear on the next restart, silently undoing the
+// deregistration (CodeRabbit review follow-up on cloud#999 step 4). Pure
+// — used by the deregister handler to build the next full entry set
+// before calling SaveTunnelTokenStore. A token not present is a no-op.
+func removeTunnelTokenEntry(entries []TunnelTokenEntry, token string) []TunnelTokenEntry {
+	kept := entries[:0]
+	for _, e := range entries {
+		if e.Token != token {
+			kept = append(kept, e)
+		}
+	}
+	return kept
+}

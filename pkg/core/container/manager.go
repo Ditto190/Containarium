@@ -823,6 +823,23 @@ chown -R "$1:$1" "$home/.config"`
 	}
 }
 
+// timedExecer is the optional capability a Manager's incus backend can
+// offer: an Exec bounded by an explicit deadline instead of blocking
+// forever on a wedged operation. Detected via type assertion so a backend
+// that doesn't implement it (test doubles that predate it) falls back to
+// the ordinary, unbounded Exec — mirrors the compactSigner pattern in
+// containarium-cloud's internal/auth/metrics_token.go.
+type timedExecer interface {
+	ExecWithTimeout(containerName string, command []string, timeout time.Duration) error
+}
+
+// createUserTimeout bounds createUser's exec (cloud#1128): a wedged Incus
+// operation has previously hung this step forever, which pins the
+// container's reported state at CREATING with no terminal state ever
+// reached — the goroutine that would report ERROR never gets that far. A
+// var (not const) so tests can shrink it.
+var createUserTimeout = 60 * time.Second
+
 // createUser creates a user in the container with sudo access.
 //
 // The three account commands run as ONE `sh -c` exec, not three: each
@@ -840,7 +857,13 @@ func (m *Manager) createUser(containerName, username string, family ostype.OSFam
 		// (ignored when the group doesn't exist), as it always was.
 		" && { " + shellJoin([]string{"usermod", "-aG", "podman", username}) + " || true; }"
 
-	if err := m.incus.Exec(containerName, []string{"/bin/sh", "-c", script}); err != nil {
+	execFn := m.incus.Exec
+	if te, ok := m.incus.(timedExecer); ok {
+		execFn = func(name string, cmd []string) error {
+			return te.ExecWithTimeout(name, cmd, createUserTimeout)
+		}
+	}
+	if err := execFn(containerName, []string{"/bin/sh", "-c", script}); err != nil {
 		return fmt.Errorf("failed to create user: %w", err)
 	}
 

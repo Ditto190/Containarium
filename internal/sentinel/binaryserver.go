@@ -113,6 +113,12 @@ func buildBinaryServerMux(binaryPath string, manager *Manager) *http.ServeMux {
 	// admin secret (CONTAINARIUM_SENTINEL_ADMIN_SECRET), not the
 	// cluster-wide daemon HMAC secret. See TunnelTokenRegisterHandler.
 	mux.Handle("/sentinel/tunnel-tokens", auth.SentinelHMACMiddleware(manager.adminSecret, manager.TunnelTokenRegisterHandler()))
+	// Its inverse (cloud#999 step 4) — a distinct method pattern on the
+	// SAME path (Go 1.22+ ServeMux: a method-specific pattern is more
+	// specific than a bare one and both may be registered), so DELETE
+	// routes here while every other method still reaches the register
+	// handler's own method check above. See TunnelTokenDeregisterHandler.
+	mux.Handle("DELETE /sentinel/tunnel-tokens", auth.SentinelHMACMiddleware(manager.adminSecret, manager.TunnelTokenDeregisterHandler()))
 
 	// Cloud pushes the authoritative BYOC public-ingress bindings
 	// (subdomain → tunnel host) here. Gated by the admin secret (an
