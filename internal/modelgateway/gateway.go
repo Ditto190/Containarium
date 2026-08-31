@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -42,14 +43,21 @@ type Config struct {
 	// behavior — a standalone daemon with no Postgres has no revocation store
 	// to consult. Production wires the same store used for platform JWTs.
 	Revocations RevocationChecker
+
+	// Policy configures per-tenant quota enforcement and the graduated response
+	// ladder (see policy.go). Nil leaves the gateway metering-only: every tenant
+	// stays in StateObserve and nothing is ever denied, which is the behavior
+	// every existing deployment already has.
+	Policy *PolicyConfig
 }
 
 // Gateway brokers every agent box's model calls: it authenticates the box's
 // scoped gateway token, injects the real provider key (which never leaves the
 // gateway), proxies to the provider, and meters per-tenant token usage.
 type Gateway struct {
-	cfg   Config
-	meter *Meter
+	cfg    Config
+	meter  *Meter
+	policy *Policy
 
 	// Request-lifecycle observability: a monotonic request id, a live
 	// in-flight gauge, and lifetime completed/failed counters. These make
@@ -67,11 +75,19 @@ func New(cfg Config) *Gateway {
 	if cfg.Logger == nil {
 		cfg.Logger = log.Default()
 	}
-	return &Gateway{cfg: cfg, meter: NewMeter()}
+	pc := PolicyConfig{}
+	if cfg.Policy != nil {
+		pc = *cfg.Policy
+	}
+	return &Gateway{cfg: cfg, meter: NewMeter(), policy: NewPolicy(pc)}
 }
 
 // Meter exposes the usage rollups (for tests / the usage endpoint).
 func (g *Gateway) Meter() *Meter { return g.meter }
+
+// Policy exposes the enforcement ladder so the daemon can drive the operator
+// verbs (revoke / clear) and read tenant state.
+func (g *Gateway) Policy() *Policy { return g.policy }
 
 const modelPrefix = "/v1/model/"
 
@@ -83,6 +99,14 @@ func (g *Gateway) Handler() http.Handler {
 	mux.HandleFunc("/__gateway/usage", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(g.meter.Snapshot())
+	})
+	// Per-tenant enforcement state: which rung each tenant is on, what put it
+	// there, and its consumption against budget. The readout an operator needs
+	// before deciding whether a throttled tenant is a runaway or a false
+	// positive.
+	mux.HandleFunc("/__gateway/policy", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(g.policy.Status())
 	})
 	mux.HandleFunc("/__gateway/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -147,6 +171,10 @@ func (g *Gateway) handleModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if claims.Provider != provName {
+		// A token presented against a provider it isn't scoped for is a probe,
+		// not a misconfiguration — the box is seeded with exactly one base URL.
+		// Recorded so the auth-failure-ratio signal can see it.
+		g.policy.RecordDenial(claims.Tenant)
 		http.Error(w, "token not valid for provider "+provName, http.StatusForbidden)
 		return
 	}
@@ -166,15 +194,12 @@ func (g *Gateway) handleModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Model ceiling (basic tiering): for Gemini the model is in the path, so we
-	// can enforce the token's allowed-model set before proxying.
+	// pathModel: for Gemini the model is in the URL path. Other providers
+	// carry it in the request body (reqModel, extracted below) — pathModel
+	// stays "" for them and is only ever a fallback for logModel.
 	pathModel := ""
 	if provName == "gemini" {
 		pathModel = geminiModelFromPath(upstreamPath)
-	}
-	if len(claims.AllowedModels) > 0 && pathModel != "" && !contains(claims.AllowedModels, pathModel) {
-		http.Error(w, "model not allowed by token: "+pathModel, http.StatusForbidden)
-		return
 	}
 
 	upstream, err := url.Parse(prov.UpstreamURL)
@@ -188,6 +213,21 @@ func (g *Gateway) handleModel(w http.ResponseWriter, r *http.Request) {
 	// enable a final usage event so the SSE path is metered. Fail-open: any read
 	// error leaves the original body in place.
 	sysPrompt, reqModel := "", ""
+	// Anthropic carries the model in the request body and nowhere else — not in
+	// the path like Gemini, and it isn't OpenAI-shaped so it misses the branch
+	// below. Without this the model-switch signal is silent for the provider
+	// that skill boxes are provisioned for by default, and the lifecycle logs
+	// report an empty model for it. Read-only: no body rewriting, since
+	// ensureStreamUsage and extractSystemPrompt are OpenAI shapes.
+	if provName == "anthropic" {
+		if raw, rerr := io.ReadAll(r.Body); rerr == nil {
+			_ = r.Body.Close()
+			reqModel = requestModel(raw)
+			r.Body = io.NopCloser(bytes.NewReader(raw))
+			r.ContentLength = int64(len(raw))
+			r.Header.Set("Content-Length", strconv.Itoa(len(raw)))
+		}
+	}
 	if provName == "openai" || provName == "gemini-openai" {
 		if raw, rerr := io.ReadAll(r.Body); rerr == nil {
 			_ = r.Body.Close()
@@ -206,6 +246,50 @@ func (g *Gateway) handleModel(w http.ResponseWriter, r *http.Request) {
 	logModel := reqModel
 	if logModel == "" {
 		logModel = pathModel
+	}
+
+	// Model ceiling (basic tiering), enforced against whichever model was
+	// actually resolved — never just pathModel. The original gate only
+	// ever compared AllowedModels to pathModel, which only Gemini sets;
+	// Anthropic, OpenAI, and Gemini-OpenAI all carry their model in the
+	// body (reqModel, above) and got a free pass regardless of what the
+	// token was scoped to. A request whose model this gateway couldn't
+	// resolve at all (logModel == "") is refused open when the token is
+	// scoped, rather than treated as ceiling-exempt: an unresolvable
+	// model is exactly the case a restricted token must not get a bypass
+	// from.
+	if len(claims.AllowedModels) > 0 && !contains(claims.AllowedModels, logModel) {
+		g.policy.RecordDenial(claims.Tenant)
+		http.Error(w, "model not allowed by token: "+logModel, http.StatusForbidden)
+		return
+	}
+
+	// Enforcement ladder. Deliberately the last gate before proxying: a denied
+	// request never reaches the Director, so the real provider key is never
+	// injected and never leaves the gateway on a call we refused.
+	if dec := g.policy.Check(RequestInfo{
+		Tenant:     claims.Tenant,
+		Skill:      claims.SkillID,
+		Provider:   provName,
+		Model:      logModel,
+		Endpoint:   upstreamPath,
+		RemoteAddr: r.RemoteAddr,
+	}); !dec.Allow {
+		if dec.RetryAfter > 0 {
+			// Round UP, and floor at 1. Truncating 59.4s to 59 tells a
+			// well-behaved client to come back while the circuit is still
+			// open, so it gets denied again — and a Retry-After of 0 invites
+			// an immediate retry, which is the opposite of a throttle.
+			secs := int(math.Ceil(dec.RetryAfter.Seconds()))
+			if secs < 1 {
+				secs = 1
+			}
+			w.Header().Set("Retry-After", strconv.Itoa(secs))
+		}
+		g.cfg.Logger.Printf("model-gateway: DENY tenant=%s skill=%s provider=%s model=%s state=%s reason=%q",
+			claims.Tenant, claims.SkillID, provName, logModel, dec.State, dec.Reason)
+		http.Error(w, "model gateway: "+dec.Reason, dec.Status)
+		return
 	}
 	// Request-lifecycle capture, read after ServeHTTP returns. Mutex-guarded
 	// because the streaming usage callback runs in filterSSEStream's goroutine
@@ -250,6 +334,7 @@ func (g *Gateway) handleModel(w http.ResponseWriter, r *http.Request) {
 						u.Model = meterModel
 					}
 					g.meter.record(claims.Tenant, claims.SkillID, provName, u)
+					g.policy.RecordUsage(claims.Tenant, u)
 					if g.cfg.Sink != nil {
 						g.cfg.Sink.RecordUsage(claims.Tenant, claims.SkillID, provName, u)
 					}
@@ -284,6 +369,7 @@ func (g *Gateway) handleModel(w http.ResponseWriter, r *http.Request) {
 			if json.Unmarshal(body, &decoded) == nil {
 				u := prov.parseUsage(decoded, pathModel)
 				g.meter.record(claims.Tenant, claims.SkillID, provName, u)
+				g.policy.RecordUsage(claims.Tenant, u)
 				if g.cfg.Sink != nil {
 					g.cfg.Sink.RecordUsage(claims.Tenant, claims.SkillID, provName, u)
 				}

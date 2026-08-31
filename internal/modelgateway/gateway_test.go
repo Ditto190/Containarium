@@ -304,6 +304,51 @@ func TestGateway_Gemini_PathModel_AllowedModelsEnforced(t *testing.T) {
 	}
 }
 
+// TestGateway_Anthropic_AllowedModelsEnforced is the sibling of the Gemini
+// case above, for the two providers whose model lives in the request BODY
+// rather than the path (Anthropic) or a query/header (n/a here — Anthropic
+// is the simplest repro). The original enforcement gate only ever compared
+// AllowedModels against pathModel, which Anthropic never sets — so a token
+// scoped to one model could request any other Anthropic model with zero
+// enforcement. This pins the fix: the check must run against whichever
+// model was actually resolved (reqModel from the body when present),
+// covering the providers that don't put the model in the URL.
+func TestGateway_Anthropic_AllowedModelsEnforced(t *testing.T) {
+	secret := []byte("s")
+	up := fakeUpstream(t, func(r *http.Request) {},
+		`{"model":"claude-cheap","usage":{"input_tokens":1,"output_tokens":1}}`)
+	defer up.Close()
+
+	providers := DefaultProviders()
+	providers["anthropic"].UpstreamURL = up.URL
+	gw := New(Config{Secret: secret, Providers: providers, ProviderKeys: map[string]string{"anthropic": "REAL-KEY"}})
+	srv := httptest.NewServer(gw.Handler())
+	defer srv.Close()
+
+	// token allows only claude-cheap
+	tok, _ := MintToken(secret, GatewayClaims{Tenant: "t", Provider: "anthropic", AllowedModels: []string{"claude-cheap"}}, time.Minute)
+
+	do := func(model string) int {
+		req, _ := http.NewRequest("POST", srv.URL+"/v1/model/anthropic/v1/messages",
+			strings.NewReader(`{"model":"`+model+`"}`))
+		req.Header.Set("Authorization", "Bearer "+tok)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if c := do("claude-cheap"); c != 200 {
+		t.Fatalf("allowed model: status %d, want 200", c)
+	}
+	if c := do("claude-expensive"); c != 403 {
+		t.Fatalf("disallowed model via request body: status %d, want 403 — the token-scoped model ceiling must apply to Anthropic's body-carried model, not just Gemini's path-carried one", c)
+	}
+}
+
 // gemini-openai is the OpenAI-compatible Gemini route the hosted OpenHands
 // canvas uses: a Bearer-authenticated /chat/completions call, proxied to
 // Google's compat endpoint with the real key injected as Bearer and metered

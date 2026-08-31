@@ -1707,12 +1707,20 @@ skipAppHosting:
 			} else {
 				log.Printf("Warning: model-gateway has no revocation store (no Postgres) — issued gateway tokens cannot be killed before they expire")
 			}
+			// Per-tenant quota + the graduated response ladder. Nil unless the
+			// operator configured a budget or turned the detectors on, so an
+			// existing deployment's behavior is unchanged by the upgrade.
+			gwPolicy := gatewayPolicyFromEnv()
+			if gwPolicy != nil {
+				gwPolicy.Alerts = gatewayPolicyLogSink{}
+			}
 			gw := modelgateway.New(modelgateway.Config{
 				Secret:       []byte(config.JWTSecret),
 				Providers:    modelgateway.DefaultProviders(),
 				ProviderKeys: keys,
 				Sink:         gwSink,
 				Revocations:  gwRevocations,
+				Policy:       gwPolicy,
 				// Redact system-prompt (skill persona) leakage on the streaming
 				// chat path (#670 layer 2). Default on; set
 				// CONTAINARIUM_GATEWAY_OUTPUT_FILTER=0 to disable. Streaming token
@@ -1730,8 +1738,13 @@ skipAppHosting:
 			// agent-workspace canvas) route their model calls through the same
 			// gateway — seed their post_start with a scoped token + base URL.
 			recipeServer.SetGatewayProvisioning(config.HTTPPort, []byte(config.JWTSecret), provs)
-			log.Printf("Model-gateway enabled (providers=%v, skill-box primary=%s) — agent boxes route model calls through the daemon; provider keys never leave the host",
-				provs, primary)
+			enforcement := "metering only (no quota or anomaly detection configured)"
+			if gwPolicy != nil {
+				enforcement = fmt.Sprintf("enforcement on (quota=%+v anomaly=%t auto-revoke-at=%.2f)",
+					gwPolicy.Quota, gwPolicy.Anomaly.Enabled, gwPolicy.RevokeAt)
+			}
+			log.Printf("Model-gateway enabled (providers=%v, skill-box primary=%s) — agent boxes route model calls through the daemon; provider keys never leave the host; %s",
+				provs, primary, enforcement)
 		}
 
 		// Sentinel-facing HMAC secret for /certs, /authorized-keys,
