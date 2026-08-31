@@ -38,6 +38,17 @@ func (tp *TokenPolicy) Allow(token string, pools ...Pool) {
 	tp.rules[token] = pools
 }
 
+// Deny removes token's rule, so a future handshake presenting it is
+// rejected exactly as if it had never been registered. A token that was
+// never Allow'd is a no-op, not an error — a decommission caller cannot
+// know in advance whether registration ever landed, and the end state is
+// identical either way.
+func (tp *TokenPolicy) Deny(token string) {
+	tp.mu.Lock()
+	defer tp.mu.Unlock()
+	delete(tp.rules, token)
+}
+
 // PolicyFromCLI builds a TokenPolicy from a single back-compat token (any
 // pool allowed) plus a list of "token=pool1,pool2,…" specs. Either may be
 // empty. Returns an error if any spec is malformed. The returned policy is
