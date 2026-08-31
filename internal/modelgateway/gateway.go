@@ -179,16 +179,12 @@ func (g *Gateway) handleModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Model ceiling (basic tiering): for Gemini the model is in the path, so we
-	// can enforce the token's allowed-model set before proxying.
+	// pathModel: for Gemini the model is in the URL path. Other providers
+	// carry it in the request body (reqModel, extracted below) — pathModel
+	// stays "" for them and is only ever a fallback for logModel.
 	pathModel := ""
 	if provName == "gemini" {
 		pathModel = geminiModelFromPath(upstreamPath)
-	}
-	if len(claims.AllowedModels) > 0 && pathModel != "" && !contains(claims.AllowedModels, pathModel) {
-		g.policy.RecordDenial(claims.Tenant)
-		http.Error(w, "model not allowed by token: "+pathModel, http.StatusForbidden)
-		return
 	}
 
 	upstream, err := url.Parse(prov.UpstreamURL)
@@ -235,6 +231,22 @@ func (g *Gateway) handleModel(w http.ResponseWriter, r *http.Request) {
 	logModel := reqModel
 	if logModel == "" {
 		logModel = pathModel
+	}
+
+	// Model ceiling (basic tiering), enforced against whichever model was
+	// actually resolved — never just pathModel. The original gate only
+	// ever compared AllowedModels to pathModel, which only Gemini sets;
+	// Anthropic, OpenAI, and Gemini-OpenAI all carry their model in the
+	// body (reqModel, above) and got a free pass regardless of what the
+	// token was scoped to. A request whose model this gateway couldn't
+	// resolve at all (logModel == "") is refused open when the token is
+	// scoped, rather than treated as ceiling-exempt: an unresolvable
+	// model is exactly the case a restricted token must not get a bypass
+	// from.
+	if len(claims.AllowedModels) > 0 && !contains(claims.AllowedModels, logModel) {
+		g.policy.RecordDenial(claims.Tenant)
+		http.Error(w, "model not allowed by token: "+logModel, http.StatusForbidden)
+		return
 	}
 
 	// Enforcement ladder. Deliberately the last gate before proxying: a denied
