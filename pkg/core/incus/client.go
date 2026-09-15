@@ -1487,6 +1487,65 @@ func waitForIP(timeout time.Duration, get func() (string, error)) (string, error
 	}
 }
 
+// WaitForAgent waits for a VM's QEMU guest agent to be reachable, by
+// retrying a no-op exec until it succeeds or timeout elapses.
+//
+// The guest agent connects over a vsock channel that is independent of
+// the network interface WaitForNetwork observes: Incus reports the
+// DHCP-leased IP as soon as the interface comes up, which is typically
+// (and on a loaded host, can be significantly) BEFORE the agent's own
+// handshake completes. Exec and file-push both require the agent, so a
+// caller that treats network-ready as exec-ready races it and can
+// observe Incus's own "VM agent isn't currently running" on an
+// otherwise healthy, still-booting VM (containarium#1862).
+func (c *Client) WaitForAgent(containerName string, timeout time.Duration) error {
+	return waitForAgent(timeout, func() error {
+		_, _, err := c.ExecWithOutput(containerName, []string{"true"})
+		return err
+	})
+}
+
+// waitForAgent polls attempt until it succeeds or timeout elapses,
+// backing off from waitNetPollMin to waitNetPollMax between tries —
+// the same shape as waitForIP, but inverted: here the error itself IS
+// the "not ready yet" signal (the agent isn't reachable), so every
+// error is retried instead of returned immediately.
+//
+// The deadline is checked before every attempt, not only after a
+// failed one: attempt (an Incus exec) has no bound of its own, so a
+// zero-or-negative budget — which IncusHost.WaitReady can hand in when
+// the network wait alone consumed the caller's whole timeout — must
+// never start one. It is checked again right after a successful
+// attempt too, since an exec that was already in flight when the
+// deadline passed would otherwise report success having silently
+// overrun the caller's budget.
+func waitForAgent(timeout time.Duration, attempt func() error) error {
+	deadline := time.Now().Add(timeout)
+	poll := waitNetPollMin
+	var lastErr error
+
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			if lastErr != nil {
+				return fmt.Errorf("timeout waiting for VM guest agent: %w", lastErr)
+			}
+			return errors.New("timeout waiting for VM guest agent")
+		}
+
+		lastErr = attempt()
+		if lastErr == nil {
+			if time.Until(deadline) <= 0 {
+				return errors.New("timeout waiting for VM guest agent: agent became reachable after the deadline")
+			}
+			return nil
+		}
+
+		time.Sleep(min(poll, time.Until(deadline)))
+		poll = min(poll*2, waitNetPollMax)
+	}
+}
+
 // GetContainerIP returns the IP address of a container, or empty string if not found
 func (c *Client) GetContainerIP(containerName string) (string, error) {
 	info, err := c.GetContainer(containerName)
