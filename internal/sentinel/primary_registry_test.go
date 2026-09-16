@@ -156,6 +156,93 @@ func TestPrimaryRegistry_TunnelBackedNoEviction(t *testing.T) {
 	})
 }
 
+// TestPrimaryRegistry_SetAliasHealth is the regression test for #1872's
+// visibility gap: GET /sentinel/primaries must be able to show "registered
+// but not actually reachable" rather than only structural registration.
+func TestPrimaryRegistry_SetAliasHealth(t *testing.T) {
+	r := NewPrimaryRegistry()
+	stored := r.Register(Primary{
+		Pool:      "prod-kafeido",
+		Hostname:  "facelabor.kafeido.app",
+		Aliases:   []string{"grpc.kafeido.app"},
+		IP:        "127.0.0.2",
+		Port:      443,
+		BackendID: "tunnel-ase1-spot-prod",
+	})
+
+	checkedAt := time.Now()
+	r.SetAliasHealth("prod-kafeido", stored.rev, []AliasHealth{
+		{Hostname: "facelabor.kafeido.app", Reachable: true, CheckedAt: checkedAt},
+		{Hostname: "grpc.kafeido.app", Reachable: false, Error: "upstream returned 502", CheckedAt: checkedAt},
+	})
+
+	p := r.LookupByPool("prod-kafeido")
+	if assert.NotNil(t, p) {
+		assert.Len(t, p.AliasHealth, 2)
+	}
+
+	// A probe racing an unregister must not resurrect a stale entry.
+	r.Unregister("prod-kafeido")
+	r.SetAliasHealth("prod-kafeido", stored.rev, []AliasHealth{{Hostname: "grpc.kafeido.app", Reachable: true}})
+	assert.Nil(t, r.LookupByPool("prod-kafeido"), "SetAliasHealth on an unregistered pool must be a no-op")
+}
+
+// TestPrimaryRegistry_SetAliasHealth_RejectsStaleRevision is the
+// regression test for the CodeRabbit finding on PR #1873: a reachability
+// sweep that started against an old declaration (captured its rev via
+// All()) must not have its results attributed to a NEW declaration that
+// Register() installed while the sweep was still running — e.g. the spot
+// reconnected with different Aliases mid-sweep. The stale sweep's
+// SetAliasHealth call must be rejected, and Register() must also clear
+// any AliasHealth already on file rather than let it linger under the new
+// declaration.
+func TestPrimaryRegistry_SetAliasHealth_RejectsStaleRevision(t *testing.T) {
+	r := NewPrimaryRegistry()
+	first := r.Register(Primary{
+		Pool:      "prod-kafeido",
+		Hostname:  "facelabor.kafeido.app",
+		Aliases:   []string{"grpc.kafeido.app"},
+		BackendID: "tunnel-ase1-spot-prod",
+		Port:      443,
+	})
+	// Register() returns a pointer to the SAME live entry on an update
+	// (see TestPrimaryRegistry_RegisterLookupHeartbeat), so firstRev must
+	// be snapshotted as a value now — reading first.rev after the second
+	// Register() call below would observe the mutated current rev, not
+	// the one this sweep actually probed against. This mirrors how
+	// checkTunnelPrimaries gets its rev: from a *copy* returned by All().
+	firstRev := first.rev
+	r.SetAliasHealth("prod-kafeido", firstRev, []AliasHealth{
+		{Hostname: "grpc.kafeido.app", Reachable: false, Error: "upstream returned 502"},
+	})
+	assert.Len(t, r.LookupByPool("prod-kafeido").AliasHealth, 1, "health should be recorded against the first declaration")
+
+	// Re-registration (e.g. the tunnel reconnected with a different
+	// alias set) must bump rev and drop the stale health.
+	second := r.Register(Primary{
+		Pool:      "prod-kafeido",
+		Hostname:  "facelabor.kafeido.app",
+		Aliases:   []string{"voice.kafeido.app"},
+		BackendID: "tunnel-ase1-spot-prod",
+		Port:      443,
+	})
+	assert.NotEqual(t, firstRev, second.rev, "rev must change on re-registration")
+	assert.Empty(t, r.LookupByPool("prod-kafeido").AliasHealth, "AliasHealth from the old declaration must be cleared")
+
+	// A late-arriving result computed against the FIRST (now-stale)
+	// declaration must be discarded, not attributed to the new one.
+	r.SetAliasHealth("prod-kafeido", firstRev, []AliasHealth{
+		{Hostname: "grpc.kafeido.app", Reachable: true},
+	})
+	assert.Empty(t, r.LookupByPool("prod-kafeido").AliasHealth, "a stale-rev SetAliasHealth call must be a no-op")
+
+	// A result computed against the CURRENT declaration must still apply.
+	r.SetAliasHealth("prod-kafeido", second.rev, []AliasHealth{
+		{Hostname: "voice.kafeido.app", Reachable: true},
+	})
+	assert.Len(t, r.LookupByPool("prod-kafeido").AliasHealth, 1)
+}
+
 func TestPrimaryRegistry_StaleEviction(t *testing.T) {
 	r := NewPrimaryRegistry()
 
