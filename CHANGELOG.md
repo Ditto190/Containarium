@@ -23,6 +23,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gains the policy flags; the platform MCP gains `tracker_create_issue`.
   (#2024)
 
+- **`containarium tracker dispatch` — a labeled issue starts its role's run,
+  exactly once.** Each tick (new `DispatchTrackerIssues` RPC, `tracker:admin`
+  plus `agents:run`) finds open issues with a routed `scope:<role>` label and
+  no `agent:*` state label, skips anything gated with `agent:needs-approval`,
+  records a durable dispatch row, starts the routed skill through the
+  `RunAgentSkill` path (run token bound to the connection; the run's input is
+  the issue reference, never its body), and labels the issue `agent:queued`.
+  A partial unique index on active rows guarantees one run per issue across
+  restarts and concurrent dispatchers. A start failure marks the dispatch
+  failed, labels `agent:failed` and comments the reason; an unrouted
+  `scope:*` label gets one warning comment, not one per tick. Re-run a
+  finished issue by removing `agent:done`/`agent:failed`. `--once` runs one
+  tick; `--interval` loops. `containarium tracker dispatches` lists dispatch
+  rows (new `ListTrackerDispatches` RPC). Until the run-completion hook
+  (#2023) lands, a successfully dispatched row stays `queued` after its run
+  ends, so that issue cannot be re-dispatched; rows created before #2023 are
+  not rescued by it either — a sweep or operator verb for stale `queued` rows
+  is tracked on #2026. (#2022)
+
 ## [0.89.0] - 2026-09-24
 
 ### Added

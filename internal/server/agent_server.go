@@ -342,6 +342,58 @@ func (s *AgentSkillServer) GetAgentSkill(ctx context.Context, req *pb.GetAgentSk
 //     are a later concern (see docs/EPHEMERAL-SANDBOX-DESIGN.md).
 //   - allowed_peers is inert until Phase 2 (eBPF enforcement).
 func (s *AgentSkillServer) RunAgentSkill(ctx context.Context, req *pb.RunAgentSkillRequest) (*pb.RunAgentSkillResponse, error) {
+	run, err := s.beginSkillRun(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	runID, containerName, box, lease, gitCommit, workspacePath := run.runID, run.containerName, run.box, run.lease, run.gitCommit, run.workspacePath
+	// The defer sits AFTER beginSkillRun on purpose: a run that failed to
+	// provision has nothing left to end (see beginSkillRun).
+	defer s.endRunLease(ctx, lease, s.boxWiper(), runExitReason)
+
+	// Run the in-box agent loop (Phase 4a) and read its artifact back.
+	// Best-effort: until the box image ships agent-runtime + agent-box this
+	// degrades to an empty artifact (prior behavior), so a base-image box never
+	// fails the run.
+	//
+	// Note on "caller-cancel": runInBoxAgent takes no context (it goes through
+	// ExecWithOutput), so cancelling the RPC does NOT interrupt the in-box
+	// process — the lease ends when the exec returns, under a detached context.
+	// Making the exec cancellable is a separate change and doesn't alter this.
+	//
+	// #1860: this read happens before the function returns, and `defer`s run
+	// after a function's return values are computed but before it returns to
+	// its caller — so artifact.json is always read into this Go string BEFORE
+	// endRunLease's directory removal ever runs. A run whose artifact was
+	// returned never loses it to the wipe.
+	artifact := s.runInBoxAgent(containerName, lease.SeedDir)
+	return &pb.RunAgentSkillResponse{
+		Container:     box,
+		ArtifactJson:  artifact,
+		RunId:         runID,
+		GitCommit:     gitCommit,
+		WorkspacePath: workspacePath,
+	}, nil
+}
+
+// startedSkillRun is what beginSkillRun hands back: a provisioned,
+// registered run whose lease the caller must end (endRunLease) once the
+// in-box agent returns.
+type startedSkillRun struct {
+	runID, containerName     string
+	box                      *pb.Container
+	lease                    runlease.Lease
+	gitCommit, workspacePath string
+}
+
+// beginSkillRun is RunAgentSkill up to (and including) registering the
+// run: scope check, run id, tracker_connection validation against the
+// caller's tenant, catalog lookup, box provisioning with the run JWT
+// minted (bound to tracker_connection), and run registration. Shared by
+// RunAgentSkill and the tracker dispatcher's RunStarter (#2022) so a
+// dispatched run goes through exactly the same path. On error nothing is
+// left to end: provisionSkillBox ends a partially minted lease itself.
+func (s *AgentSkillServer) beginSkillRun(ctx context.Context, req *pb.RunAgentSkillRequest) (*startedSkillRun, error) {
 	if err := auth.RequireScope(ctx, auth.ScopeAgentsRun); err != nil {
 		return nil, err
 	}
@@ -376,12 +428,14 @@ func (s *AgentSkillServer) RunAgentSkill(ctx context.Context, req *pb.RunAgentSk
 		return nil, err
 	}
 
-	// The run holds its credentials for exactly as long as the run (#1817). The
-	// defer sits AFTER provisioning on purpose: a provisioning failure has
-	// nothing to end but a partially minted lease, which provisionSkillBox ends
-	// itself before returning its error. From here on every exit path — the
-	// artifact below, an agent error, a cancelled caller — revokes both jtis and
-	// wipes the seed files.
+	// The run holds its credentials for exactly as long as the run (#1817). A
+	// provisioning failure has nothing to end but a partially minted lease,
+	// which provisionSkillBox ends itself before returning its error — which
+	// is why the callers' `defer endRunLease` (RunAgentSkill, and
+	// finishDispatchedRun for a dispatched run) only exists once this
+	// function has returned a run. From there every exit path — the artifact,
+	// an agent error, a cancelled caller — revokes both jtis and wipes the
+	// seed files.
 	//
 	// RESOLVED (#1860) — the box is still shared by skill id ("agent-"+skill.Id,
 	// see provisionSkillBox), but the seed directory no longer is: every run,
@@ -415,30 +469,9 @@ func (s *AgentSkillServer) RunAgentSkill(ctx context.Context, req *pb.RunAgentSk
 			GitRef:    req.GetGitRef(),
 		})
 	}
-	defer s.endRunLease(ctx, lease, s.boxWiper(), runExitReason)
-
-	// Run the in-box agent loop (Phase 4a) and read its artifact back.
-	// Best-effort: until the box image ships agent-runtime + agent-box this
-	// degrades to an empty artifact (prior behavior), so a base-image box never
-	// fails the run.
-	//
-	// Note on "caller-cancel": runInBoxAgent takes no context (it goes through
-	// ExecWithOutput), so cancelling the RPC does NOT interrupt the in-box
-	// process — the lease ends when the exec returns, under a detached context.
-	// Making the exec cancellable is a separate change and doesn't alter this.
-	//
-	// #1860: this read happens before the function returns, and `defer`s run
-	// after a function's return values are computed but before it returns to
-	// its caller — so artifact.json is always read into this Go string BEFORE
-	// endRunLease's directory removal ever runs. A run whose artifact was
-	// returned never loses it to the wipe.
-	artifact := s.runInBoxAgent(containerName, lease.SeedDir)
-	return &pb.RunAgentSkillResponse{
-		Container:     box,
-		ArtifactJson:  artifact,
-		RunId:         runID,
-		GitCommit:     gitCommit,
-		WorkspacePath: workspacePath,
+	return &startedSkillRun{
+		runID: runID, containerName: containerName, box: box, lease: lease,
+		gitCommit: gitCommit, workspacePath: workspacePath,
 	}, nil
 }
 
