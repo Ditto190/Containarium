@@ -145,6 +145,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reservation becomes the lineage row afterwards; same-run creates queue
   on an in-process gate before taking a connection. The per-run fan-out
   cap and exactly-once lineage still hold. (#2044)
+
+- **`tracker dispatch` now enforces the connection's `max_depth` itself.**
+  Each tick reads a routed issue's depth from the daemon's own lineage table
+  and skips any issue deeper than the connection policy allows, reported as
+  `skipped_over_depth` (`over-depth=` in the CLI tick line). The policy is
+  re-read every tick, so lowering `--max-depth` after a chain was filed still
+  stops its deeper issues. The dispatch row and the run's input now carry the
+  issue's real depth (previously always 0). New tests pin the depth,
+  fan-out and allow-list guards through the daemon, including an issue body
+  that instructs the run to widen its policy, routes or labels — each
+  attempt is rejected and nothing reaches the tracker. Three further tests
+  document open gaps in the approval gate as current behavior, not fixes:
+  a run token can remove `agent:needs-approval`, reset depth through an
+  agent-chosen parent, and add a `scope:*` label that dispatches an ungated
+  issue (#2060). (Part of #2025)
+
 - **`code run` on a box without `agent-box` now names the missing helper** and
   the command that installs it, instead of surfacing
   `initialize MCP session: transport error: transport closed`. The same
